@@ -3,8 +3,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::agents::tmux::TmuxOps;
 use crate::core::events::QueueEvent;
-use crate::core::ports::{Clock, GitOps, QueueStore};
+use crate::core::ports::{AgentRegistry, Clock, GitOps, QueueStore};
 use crate::core::queue::{MergeFailureReason, QueueEntry, QueueStatus, StepOutcome};
 use crate::core::repo::RegisteredRepo;
 use crate::core::state_machine::{advance_status, transition, NextAction, TerminalStatus};
@@ -16,8 +17,8 @@ use crate::engine::shell;
 use crate::engine::shutdown::ShutdownToken;
 use crate::error::Result;
 
-/// Bag of dependencies a worker needs. All four come in through
-/// trait objects so tests can supply fakes.
+/// Bag of dependencies a worker needs. All come in through trait objects
+/// so tests can supply fakes.
 pub struct WorkerDeps {
     pub store: Arc<dyn QueueStore>,
     pub git: Arc<dyn GitOps>,
@@ -25,6 +26,12 @@ pub struct WorkerDeps {
     pub events: Arc<EventBroadcaster>,
     pub shutdown: ShutdownToken,
     pub runs_dir: std::path::PathBuf,
+    pub tmux: Arc<dyn TmuxOps>,
+    pub agents: Arc<dyn AgentRegistry>,
+    /// Identifier the tmux session is scoped to (typically the
+    /// MergeSmith PID). Lets workers running in the same process share
+    /// one tmux session.
+    pub tmux_session_pid: u32,
 }
 
 pub struct Worker {
@@ -196,9 +203,13 @@ impl Worker {
 
     fn handoff(&self, entry: &mut QueueEntry) -> Result<()> {
         let from = entry.status;
-        let session = handoff::open_placeholder_session(
+        let session = handoff::open_conflict_session(
             &*self.deps.store,
             &*self.deps.clock,
+            &*self.deps.tmux,
+            &*self.deps.agents,
+            &*self.deps.git,
+            self.deps.tmux_session_pid,
             &self.repo,
             entry,
         )?;

@@ -21,6 +21,15 @@ pub enum Error {
     #[error("git: {0}")]
     Git(String),
 
+    #[error("tmux: {0}")]
+    Tmux(String),
+
+    #[error("agent: {0}")]
+    Agent(String),
+
+    #[error("template: {0}")]
+    Template(String),
+
     #[error("invalid input: {0}")]
     Invalid(String),
 
@@ -47,5 +56,17 @@ impl Error {
 
     pub fn invalid(s: impl Into<String>) -> Self {
         Self::Invalid(s.into())
+    }
+
+    pub fn tmux(s: impl Into<String>) -> Self {
+        Self::Tmux(s.into())
+    }
+
+    pub fn agent(s: impl Into<String>) -> Self {
+        Self::Agent(s.into())
+    }
+
+    pub fn template(s: impl Into<String>) -> Self {
+        Self::Template(s.into())
     }
 }

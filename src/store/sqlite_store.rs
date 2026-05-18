@@ -124,7 +124,6 @@ fn parse_failure_reason(s: &str) -> Result<MergeFailureReason> {
     }
 }
 
-#[cfg(test)]
 fn parse_conflict_outcome(s: &str) -> Result<ConflictOutcome> {
     match s {
         "Resolved" => Ok(ConflictOutcome::Resolved),
@@ -244,7 +243,6 @@ fn entry_from_row(row: &Row<'_>) -> rusqlite::Result<QueueEntry> {
     })
 }
 
-#[cfg(test)]
 fn conflict_from_row(row: &Row<'_>) -> rusqlite::Result<ConflictSession> {
     let conv_id = |e: uuid::Error| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -634,6 +632,32 @@ impl QueueStore for SqliteStore {
         })
     }
 
+    fn get_conflict_session(&self, id: ConflictSessionId) -> Result<Option<ConflictSession>> {
+        self.with_conn(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT * FROM conflict_sessions WHERE id = ?1",
+                    [id.to_string()],
+                    conflict_from_row,
+                )
+                .optional()?)
+        })
+    }
+
+    fn list_open_conflict_sessions(&self) -> Result<Vec<ConflictSession>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT * FROM conflict_sessions WHERE ended_at IS NULL ORDER BY started_at",
+            )?;
+            let rows = stmt.query_map([], conflict_from_row)?;
+            let mut v = Vec::new();
+            for r in rows {
+                v.push(r?);
+            }
+            Ok(v)
+        })
+    }
+
     fn close_conflict_session(
         &self,
         id: ConflictSessionId,
@@ -648,22 +672,6 @@ impl QueueStore for SqliteStore {
                 params![id.to_string(), outcome.as_str(), dt_to_ts(when)],
             )?;
             Ok(())
-        })
-    }
-}
-
-#[cfg(test)]
-impl SqliteStore {
-    /// Test helper to read back a conflict session.
-    pub fn get_conflict_session(&self, id: ConflictSessionId) -> Result<Option<ConflictSession>> {
-        self.with_conn(|conn| {
-            Ok(conn
-                .query_row(
-                    "SELECT * FROM conflict_sessions WHERE id = ?1",
-                    [id.to_string()],
-                    conflict_from_row,
-                )
-                .optional()?)
         })
     }
 }

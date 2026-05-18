@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use crate::cli::context::CliContext;
 use crate::cli::parser::IdArg;
+use crate::core::conflict::ConflictOutcome;
 use crate::core::queue::{QueueStatus, StepOutcome};
 use crate::error::Result;
 
@@ -25,6 +26,25 @@ pub fn run(args: IdArg) -> Result<ExitCode> {
     // FSM routes us back to Rebase. Failed/Cancelled re-queue from
     // scratch (no last_outcome).
     let resumed_from_conflict = entry.status == QueueStatus::NeedsHelp;
+
+    // Close the conflict session (if any) as Resolved before re-queueing.
+    // The human running `retry` is asserting "the agent's done." If the
+    // session was already closed (e.g. by the recovery sweep marking it
+    // Abandoned) we leave its outcome alone.
+    if resumed_from_conflict {
+        if let Some(sid) = entry.conflict_session_id {
+            if let Some(session) = ctx.store.get_conflict_session(sid)? {
+                if session.ended_at.is_none() {
+                    ctx.store.close_conflict_session(
+                        sid,
+                        ConflictOutcome::Resolved,
+                        ctx.clock.now(),
+                    )?;
+                }
+            }
+        }
+    }
+
     entry.status = QueueStatus::Queued;
     entry.failure_reason = None;
     entry.finished_at = None;

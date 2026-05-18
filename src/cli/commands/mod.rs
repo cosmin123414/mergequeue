@@ -6,6 +6,7 @@ mod enqueue;
 mod init;
 mod logs;
 mod repos;
+mod resolve;
 mod retry;
 mod status;
 
@@ -28,6 +29,7 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode> {
         Some(Command::Status(a)) => status::run(a),
         Some(Command::Cancel(a)) => cancel::run(a),
         Some(Command::Retry(a)) => retry::run(a),
+        Some(Command::Resolve(a)) => resolve::run(a),
         Some(Command::Logs(a)) => logs::run(a),
         Some(Command::Repos(a)) => repos::run(a),
         Some(Command::Doctor) => doctor::run(),

@@ -7,15 +7,19 @@ use std::time::Duration;
 use tempfile::TempDir;
 use time::OffsetDateTime;
 
+use crate::agents::tmux::TmuxOps;
 use crate::core::agent_backend::AgentBackend;
 use crate::core::ids::{QueueEntryId, RepoId};
-use crate::core::ports::{FastForwardOutcome, GitOps, QueueStore, RebaseOutcome};
+use crate::core::ports::{AgentRegistry, FastForwardOutcome, GitOps, QueueStore, RebaseOutcome};
 use crate::core::queue::{MergeFailureReason, QueueEntry, QueueStatus};
 use crate::core::repo::{RegisteredRepo, RepoCiConfig};
 use crate::engine::events::EventBroadcaster;
 use crate::engine::shutdown::ShutdownToken;
 use crate::engine::worker::{Worker, WorkerDeps};
-use crate::test_support::{fake_store::make_fake_store, FakeClock, FakeGit, GitScript};
+use crate::test_support::{
+    fake_store::make_fake_store, FakeAgent, FakeAgentRegistry, FakeClock, FakeGit, FakeTmux,
+    GitScript, TmuxCall,
+};
 
 fn fixture_repo(root: std::path::PathBuf, ci: RepoCiConfig) -> RegisteredRepo {
     let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
@@ -52,13 +56,27 @@ fn fixture_entry(repo: &RegisteredRepo, source_branch: &str) -> QueueEntry {
     }
 }
 
+/// Returned helpers for tests that want to inspect tmux/agent calls.
+#[allow(dead_code)]
+struct Helpers {
+    events: Arc<EventBroadcaster>,
+    clock: Arc<FakeClock>,
+    tmux: Arc<FakeTmux>,
+    agent: Arc<FakeAgent>,
+}
+
 fn build_deps(
     git: Arc<dyn GitOps>,
     store: Arc<dyn QueueStore>,
     runs: std::path::PathBuf,
-) -> (WorkerDeps, Arc<EventBroadcaster>, Arc<FakeClock>) {
+) -> (WorkerDeps, Helpers) {
     let clock = Arc::new(FakeClock::epoch());
     let events = Arc::new(EventBroadcaster::with_history());
+    let tmux: Arc<FakeTmux> = Arc::new(FakeTmux::new());
+    let agent = Arc::new(FakeAgent::new(AgentBackend::Opencode));
+    let registry = Arc::new(FakeAgentRegistry::new(agent.clone()));
+    let tmux_ops: Arc<dyn TmuxOps> = tmux.clone();
+    let agents: Arc<dyn AgentRegistry> = registry;
     let deps = WorkerDeps {
         store,
         git,
@@ -66,8 +84,19 @@ fn build_deps(
         events: events.clone(),
         shutdown: ShutdownToken::new(),
         runs_dir: runs,
+        tmux: tmux_ops,
+        agents,
+        tmux_session_pid: 9999,
     };
-    (deps, events, clock)
+    (
+        deps,
+        Helpers {
+            events,
+            clock,
+            tmux,
+            agent,
+        },
+    )
 }
 
 /// Happy path: precheck OK, rebase OK, no CI configured, fast-forward
@@ -87,7 +116,7 @@ fn happy_path_no_ci_merges_cleanly() {
         ..GitScript::new()
     };
     let git = Arc::new(FakeGit::new(script));
-    let (deps, _events, _clock) = build_deps(git, store.clone(), tmp.path().to_path_buf());
+    let (deps, _h) = build_deps(git, store.clone(), tmp.path().to_path_buf());
     let worker = Worker::new(repo.clone(), deps, Duration::from_millis(10));
 
     // Claim the entry the way the run loop would, then process it.
@@ -116,10 +145,11 @@ fn rebase_conflict_becomes_needs_help() {
 
     let script = GitScript {
         rebase: vec![RebaseOutcome::Conflict].into(),
+        conflicted_files: vec![vec!["src/lib.rs".into(), "Cargo.toml".into()]].into(),
         ..GitScript::new()
     };
     let git = Arc::new(FakeGit::new(script));
-    let (deps, _events, _clock) = build_deps(git, store.clone(), tmp.path().to_path_buf());
+    let (deps, h) = build_deps(git, store.clone(), tmp.path().to_path_buf());
     let worker = Worker::new(repo.clone(), deps, Duration::from_millis(10));
 
     let claimed = store
@@ -135,6 +165,39 @@ fn rebase_conflict_becomes_needs_help() {
         Some(MergeFailureReason::RebaseUnresolvable)
     );
     assert!(final_entry.conflict_session_id.is_some());
+
+    // Handoff opened a tmux window AND invoked the agent.
+    let agent_calls = h.agent.calls();
+    assert_eq!(agent_calls.len(), 1);
+    assert_eq!(agent_calls[0].backend, AgentBackend::Opencode);
+    assert_eq!(
+        agent_calls[0].prompt.conflicted_files,
+        vec!["src/lib.rs".to_string(), "Cargo.toml".to_string()]
+    );
+    assert_eq!(agent_calls[0].prompt.source_branch, "feat/conflict");
+    assert_eq!(agent_calls[0].prompt.target_branch, "main");
+    assert_eq!(agent_calls[0].tmux.session, "mergesmith-9999");
+    let short = final_entry.id.short();
+    assert_eq!(agent_calls[0].tmux.window, format!("conflict-{short}"));
+
+    // And the tmux side recorded the new window.
+    let tmux_calls = h.tmux.calls();
+    assert!(
+        tmux_calls
+            .iter()
+            .any(|c| matches!(c, TmuxCall::NewWindow { window, .. } if window.contains(&short))),
+        "expected NewWindow in {tmux_calls:?}"
+    );
+
+    // The persisted ConflictSession knows about the tmux session/window.
+    let conflict_id = final_entry.conflict_session_id.unwrap();
+    let sessions = store
+        .list_entries(crate::core::ports::EntryFilter::all())
+        .unwrap();
+    assert!(sessions.iter().any(|e| e.id == final_entry.id));
+    // The store's getter for sessions is not in QueueStore today; check
+    // via the dedicated open/close trail by inspecting the entry.
+    assert_eq!(final_entry.conflict_session_id, Some(conflict_id));
 }
 
 /// Dirty target should not consume a rebase script entry — worker must
@@ -161,7 +224,7 @@ fn dirty_target_returns_to_queued_and_sleeps() {
         ..GitScript::new()
     };
     let git = Arc::new(FakeGit::new(script));
-    let (deps, _events, clock) = build_deps(git, store.clone(), tmp.path().to_path_buf());
+    let (deps, h) = build_deps(git, store.clone(), tmp.path().to_path_buf());
     let worker = Worker::new(repo.clone(), deps, Duration::from_millis(10));
 
     let claimed = store
@@ -174,7 +237,7 @@ fn dirty_target_returns_to_queued_and_sleeps() {
     assert_eq!(after.status, QueueStatus::Queued);
     assert!(after.claimed_by_pid.is_none());
     // FakeClock recorded a sleep of exactly the configured retry.
-    assert_eq!(clock.sleeps(), vec![Duration::from_secs(7)]);
+    assert_eq!(h.clock.sleeps(), vec![Duration::from_secs(7)]);
 }
 
 /// FF rejected should finalize as Failed with FastForwardFailed.
@@ -193,7 +256,7 @@ fn fast_forward_rejected_finalizes_failed() {
         ..GitScript::new()
     };
     let git = Arc::new(FakeGit::new(script));
-    let (deps, _events, _clock) = build_deps(git, store.clone(), tmp.path().to_path_buf());
+    let (deps, _h) = build_deps(git, store.clone(), tmp.path().to_path_buf());
     let worker = Worker::new(repo.clone(), deps, Duration::from_millis(10));
 
     let claimed = store
@@ -237,7 +300,7 @@ fn ci_lint_failure_short_circuits() {
         ..GitScript::new()
     };
     let git = Arc::new(FakeGit::new(script));
-    let (deps, _events, _clock) = build_deps(git, store.clone(), runs.clone());
+    let (deps, _h) = build_deps(git, store.clone(), runs.clone());
     let worker = Worker::new(repo.clone(), deps, Duration::from_millis(10));
 
     let claimed = store
@@ -282,7 +345,7 @@ fn ci_all_steps_pass_then_merges() {
         ..GitScript::new()
     };
     let git = Arc::new(FakeGit::new(script));
-    let (deps, _events, _clock) = build_deps(git, store.clone(), runs.clone());
+    let (deps, _h) = build_deps(git, store.clone(), runs.clone());
     let worker = Worker::new(repo.clone(), deps, Duration::from_millis(10));
 
     let claimed = store

@@ -6,9 +6,11 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use mergesmith::agents::tmux::{ProcessTmux, TmuxOps};
+use mergesmith::agents::DefaultAgentRegistry;
 use mergesmith::core::agent_backend::AgentBackend;
 use mergesmith::core::ids::{QueueEntryId, RepoId};
-use mergesmith::core::ports::{Clock, GitOps, QueueStore};
+use mergesmith::core::ports::{AgentRegistry, Clock, GitOps, QueueStore};
 use mergesmith::core::queue::{QueueEntry, QueueStatus};
 use mergesmith::core::repo::{RegisteredRepo, RepoCiConfig};
 use mergesmith::engine::events::EventBroadcaster;
@@ -92,6 +94,11 @@ fn worker_merges_a_clean_fast_forward() {
     };
     store.enqueue(&entry).unwrap();
 
+    // Tmux + agent registry are constructed but never called: this test
+    // exercises a clean fast-forward path that doesn't hit `handoff`.
+    let tmux_ops: Arc<dyn TmuxOps> = Arc::new(ProcessTmux::new());
+    let agents: Arc<dyn AgentRegistry> = Arc::new(DefaultAgentRegistry::new(tmux_ops.clone()));
+
     let deps = WorkerDeps {
         store: store.clone(),
         git,
@@ -99,6 +106,9 @@ fn worker_merges_a_clean_fast_forward() {
         events,
         shutdown: ShutdownToken::new(),
         runs_dir: state_root.path().join("runs"),
+        tmux: tmux_ops,
+        agents,
+        tmux_session_pid: std::process::id(),
     };
     let worker = Worker::new(repo.clone(), deps, Duration::from_millis(10));
 

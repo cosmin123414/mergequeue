@@ -18,6 +18,7 @@ pub struct GitScript {
     pub current_branch: VecDeque<String>,
     pub head_sha: VecDeque<String>,
     pub discover: VecDeque<PathBuf>,
+    pub conflicted_files: VecDeque<Vec<String>>,
 }
 
 impl GitScript {
@@ -132,5 +133,16 @@ impl GitOps for FakeGit {
             .discover
             .pop_front()
             .unwrap_or_else(|| start.to_path_buf()))
+    }
+
+    fn conflicted_files(&self, worktree: &Path) -> Result<Vec<String>> {
+        self.record(format!("conflicted_files({})", worktree.display()));
+        Ok(self
+            .script
+            .lock()
+            .unwrap()
+            .conflicted_files
+            .pop_front()
+            .unwrap_or_default())
     }
 }

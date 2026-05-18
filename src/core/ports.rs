@@ -8,6 +8,8 @@ use time::OffsetDateTime;
 
 use crate::core::agent_backend::AgentBackend;
 use crate::core::conflict::{ConflictOutcome, ConflictSession};
+// `ConflictSession` is used by the QueueStore trait; agents return an
+// `AgentSessionAck` and the engine wraps it into a `ConflictSession`.
 use crate::core::ids::{ConflictSessionId, QueueEntryId, RepoId};
 use crate::core::queue::{QueueEntry, QueueStatus};
 use crate::core::repo::RegisteredRepo;
@@ -72,6 +74,10 @@ pub trait QueueStore: Send + Sync {
 
     // Conflict sessions
     fn open_conflict_session(&self, s: &ConflictSession) -> Result<()>;
+    fn get_conflict_session(&self, id: ConflictSessionId) -> Result<Option<ConflictSession>>;
+    /// Sessions with `ended_at IS NULL`. Used by the recovery sweep to
+    /// detect orphans when MergeSmith restarts.
+    fn list_open_conflict_sessions(&self) -> Result<Vec<ConflictSession>>;
     fn close_conflict_session(
         &self,
         id: ConflictSessionId,
@@ -108,6 +114,10 @@ pub trait GitOps: Send + Sync {
     fn fast_forward(&self, target_worktree: &Path, source_ref: &str) -> Result<FastForwardOutcome>;
     /// Locate the worktree root (`git rev-parse --show-toplevel`).
     fn discover_worktree_root(&self, start: &Path) -> Result<PathBuf>;
+    /// Paths (relative to the worktree root) currently flagged as
+    /// unmerged (`git diff --name-only --diff-filter=U`). Empty when
+    /// no rebase is in progress.
+    fn conflicted_files(&self, worktree: &Path) -> Result<Vec<String>>;
 }
 
 // ---------------------------------------------------------------------
@@ -131,15 +141,31 @@ pub struct TmuxHandle {
     pub window: String,
 }
 
+/// Acknowledgement that the agent placed itself inside the given tmux
+/// handle. The engine wraps this in a `ConflictSession` with the right
+/// `QueueEntryId`, `Clock`-stamped `started_at`, and a fresh
+/// `ConflictSessionId`. Returned as a struct so we can grow it
+/// (e.g. an agent-side session identifier) without churning the
+/// engine.
+#[derive(Debug, Clone, Default)]
+pub struct AgentSessionAck {
+    /// Optional opaque token the backend can return (e.g. an opencode
+    /// session id). Persisted for diagnostics; not used by the engine.
+    pub agent_session_token: Option<String>,
+}
+
 pub trait MergeAgent: Send + Sync {
     fn backend(&self) -> AgentBackend;
     fn check_available(&self) -> Result<()>;
+    /// Spawn the agent inside `tmux` with `prompt`, working from
+    /// `worktree`. Implementations must return promptly once the agent
+    /// has been started; they must NOT block until the agent finishes.
     fn open_conflict_session(
         &self,
         worktree: &Path,
         prompt: &ConflictPrompt,
         tmux: &TmuxHandle,
-    ) -> Result<ConflictSession>;
+    ) -> Result<AgentSessionAck>;
 }
 
 pub trait AgentRegistry: Send + Sync {

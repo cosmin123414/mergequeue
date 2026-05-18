@@ -26,6 +26,8 @@ pub enum Command {
     Cancel(IdArg),
     /// Re-enqueue a Failed or NeedsHelp entry.
     Retry(IdArg),
+    /// Attach to (or open) the agent session for a NeedsHelp entry.
+    Resolve(IdArg),
     /// Print CI + merge logs for an entry.
     Logs(IdArg),
     /// Manage registered repos.

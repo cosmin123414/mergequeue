@@ -42,6 +42,9 @@ clap = { version = "4", features = ["derive", "wrap_help"] }
 # Engine
 crossbeam-channel = "0.5"
 
+# Agents
+minijinja = "2"
+
 # Misc
 which = "6"
 

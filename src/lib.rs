@@ -7,6 +7,7 @@
 //! `agents`) implement those ports. The `engine` consumes ports
 //! exclusively; the `tui` and `cli` are the two presentation surfaces.
 
+pub mod agents;
 pub mod cli;
 pub mod core;
 pub mod engine;

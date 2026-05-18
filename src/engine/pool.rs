@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::core::ports::{Clock, GitOps, QueueStore};
+use crate::agents::tmux::TmuxOps;
+use crate::core::ports::{AgentRegistry, Clock, GitOps, QueueStore};
 use crate::engine::events::EventBroadcaster;
 use crate::engine::shutdown::ShutdownToken;
 use crate::engine::worker::{Worker, WorkerDeps};
@@ -29,6 +30,9 @@ impl EnginePool {
         shutdown: ShutdownToken,
         runs_dir: std::path::PathBuf,
         poll_interval: Duration,
+        tmux: Arc<dyn TmuxOps>,
+        agents: Arc<dyn AgentRegistry>,
+        tmux_session_pid: u32,
     ) -> Result<Self> {
         let repos = store.list_repos()?;
         let mut handles = Vec::with_capacity(repos.len());
@@ -40,6 +44,9 @@ impl EnginePool {
                 events: events.clone(),
                 shutdown: shutdown.clone(),
                 runs_dir: runs_dir.clone(),
+                tmux: tmux.clone(),
+                agents: agents.clone(),
+                tmux_session_pid,
             };
             let worker = Worker::new(repo, deps, poll_interval);
             let h = std::thread::Builder::new()

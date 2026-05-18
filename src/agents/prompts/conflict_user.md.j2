@@ -1,0 +1,23 @@
+A rebase of `{{ source_branch }}` onto `{{ target_branch }}` in
+`{{ repo_name }}` produced conflicts. The worktree is your current
+directory.
+
+Conflicted files:
+{% for f in conflicted_files %}
+- `{{ f }}`
+{% endfor %}
+
+{% if ci_command_hint -%}
+After resolving, the project's CI command is:
+
+```
+{{ ci_command_hint }}
+```
+
+Run it and make it pass before declaring you're done.
+{%- else -%}
+After resolving, run the project's tests (the obvious command for this
+codebase) and make them pass before declaring you're done.
+{%- endif %}
+
+When finished, print `MERGESMITH: ready for retry` on its own line.

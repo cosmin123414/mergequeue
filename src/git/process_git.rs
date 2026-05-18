@@ -156,4 +156,22 @@ impl GitOps for ProcessGit {
         }
         Ok(PathBuf::from(s))
     }
+
+    fn conflicted_files(&self, worktree: &Path) -> Result<Vec<String>> {
+        let out = self.run(worktree, &["diff", "--name-only", "--diff-filter=U"])?;
+        if !out.status.success() {
+            // If there's no rebase in progress, this still succeeds with
+            // an empty stdout. A non-zero exit means something else is
+            // off — surface it.
+            return Err(Error::Git(format!(
+                "git diff (conflicted files) failed: {}",
+                Self::stderr_string(&out)
+            )));
+        }
+        let s = Self::stdout_string(&out);
+        if s.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(s.lines().map(str::to_string).collect())
+    }
 }
