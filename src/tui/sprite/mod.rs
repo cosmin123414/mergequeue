@@ -185,20 +185,21 @@ mod tests {
 
     #[test]
     fn place_emits_position_command() {
+        use crate::tui::sprite::placeholder::{FRAME_H, FRAME_W};
         let buf = SharedBuf::default();
         let mut r = SpriteRenderer::new(Box::new(buf.clone()), false).unwrap();
-        r.place(SpriteState::Working, 0, 12, 6).unwrap();
+        r.place(SpriteState::Working, 0, 40, 20).unwrap();
         let bytes = buf.snapshot();
         let txt = String::from_utf8_lossy(&bytes);
         assert!(txt.contains("a=p"));
-        // Working row starts at y=64; frame 0 starts at x=0.
-        assert!(txt.contains("y=64"));
-        // Source dimensions are 64×64.
-        assert!(txt.contains("w=64"));
-        assert!(txt.contains("h=64"));
+        // Working row starts at y = FRAME_H; frame 0 starts at x = 0.
+        assert!(txt.contains(&format!("y={FRAME_H}")));
+        // Source dimensions are FRAME_W × FRAME_H.
+        assert!(txt.contains(&format!("w={FRAME_W}")));
+        assert!(txt.contains(&format!("h={FRAME_H}")));
         // Cell footprint:
-        assert!(txt.contains("c=12"));
-        assert!(txt.contains("r=6"));
+        assert!(txt.contains("c=40"));
+        assert!(txt.contains("r=20"));
     }
 
     #[test]
@@ -213,16 +214,16 @@ mod tests {
 
     #[test]
     fn place_frame_advances_with_tick() {
+        use crate::tui::sprite::placeholder::FRAME_W;
         let buf = SharedBuf::default();
         let mut r = SpriteRenderer::new(Box::new(buf.clone()), false).unwrap();
-        r.place(SpriteState::Idle, 0, 12, 6).unwrap();
-        r.place(SpriteState::Idle, 2, 12, 6).unwrap();
+        // Idle: ticks_per_frame = 4, so tick 0 = frame 0, tick 4 = frame 1.
+        r.place(SpriteState::Idle, 0, 40, 20).unwrap();
+        r.place(SpriteState::Idle, 4, 40, 20).unwrap();
         let bytes = buf.snapshot();
         let txt = String::from_utf8_lossy(&bytes);
-        // Idle frame 0 starts at x=0; frame 1 starts at x=64.
-        // (Idle ticks_per_frame=2 → tick=0 picks frame 0, tick=2 picks frame 1.)
-        // Both `a=p` envelopes appear.
         assert_eq!(txt.matches("a=p").count(), 2);
-        assert!(txt.contains("x=64"));
+        // Frame 1 starts at x = FRAME_W.
+        assert!(txt.contains(&format!("x={FRAME_W}")));
     }
 }

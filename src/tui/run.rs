@@ -201,12 +201,21 @@ fn render_loop(store: &Arc<dyn QueueStore>, pool: &EnginePool) -> Result<(), Run
             crossterm::cursor::MoveTo(layout.sprite.x, layout.sprite.y)
         )
         .map_err(|e| RunError::Internal(Error::other(format!("cursor: {e}"))))?;
+        // Compute the on-screen cell footprint that preserves the
+        // sprite's aspect ratio. Without this the terminal would
+        // stretch the image to fill the rect, squashing the smith.
+        let (cols, rows) = fit_sprite_footprint(layout.sprite.width, layout.sprite.height);
+        // Re-center horizontally so any unused columns become margin.
+        let sprite_x = layout.sprite.x + (layout.sprite.width.saturating_sub(cols)) / 2;
+        let sprite_y = layout.sprite.y + (layout.sprite.height.saturating_sub(rows)) / 2;
+        crossterm::queue!(so, crossterm::cursor::MoveTo(sprite_x, sprite_y))
+            .map_err(|e| RunError::Internal(Error::other(format!("recenter: {e}"))))?;
         sprite
             .place(
                 app.sprite_state,
                 app.sprite_tick,
-                u32::from(layout.sprite.width.saturating_sub(2)),
-                u32::from(layout.sprite.height),
+                u32::from(cols),
+                u32::from(rows),
             )
             .map_err(RunError::Internal)?;
         // Hide the cursor so it doesn't blink on top of the sprite.
@@ -268,6 +277,42 @@ fn render_loop(store: &Arc<dyn QueueStore>, pool: &EnginePool) -> Result<(), Run
     Ok(())
 }
 
+/// Compute the on-screen cell footprint `(cols, rows)` for the
+/// sprite, preserving its native aspect ratio.
+///
+/// The sprite source is 320×448 pixels and a typical terminal cell
+/// is roughly 8×16 pixels, so the sprite's natural footprint is
+/// 40×28 cells (10:7). We scale that footprint down uniformly until
+/// it fits inside `avail_cols × avail_rows`.
+///
+/// We never scale UP past native, which would make the stipple look
+/// blurry on small terminals.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn fit_sprite_footprint(avail_cols: u16, avail_rows: u16) -> (u16, u16) {
+    use crate::tui::sprite::placeholder::{FRAME_H, FRAME_W};
+    // Approximate cell dimensions. Real terminals vary; the canonical
+    // 8×16 ratio is what most fixed-width fonts settle near.
+    const CELL_W: u32 = 8;
+    const CELL_H: u32 = 16;
+    let native_cols = (FRAME_W / CELL_W) as u16; // ≈ 40
+    let native_rows = (FRAME_H / CELL_H) as u16; // ≈ 28
+
+    if avail_cols == 0 || avail_rows == 0 {
+        return (1, 1);
+    }
+    // Scale down by whichever axis binds first.
+    let scale_w = f32::from(avail_cols) / f32::from(native_cols);
+    let scale_h = f32::from(avail_rows) / f32::from(native_rows);
+    let scale = scale_w.min(scale_h).min(1.0); // never upscale
+    let cols = ((f32::from(native_cols) * scale).round() as u16).max(1);
+    let rows = ((f32::from(native_rows) * scale).round() as u16).max(1);
+    (cols.min(avail_cols), rows.min(avail_rows))
+}
+
 /// RAII wrapper for the alternate-screen mode + raw-mode pair.
 /// Disables both on drop, even on panic.
 struct AltScreenGuard;
@@ -291,5 +336,44 @@ impl Drop for AltScreenGuard {
             crossterm::terminal::LeaveAlternateScreen
         );
         let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    #[test]
+    fn native_fits_when_space_is_ample() {
+        // Plenty of room: returns native 40×28.
+        assert_eq!(fit_sprite_footprint(120, 60), (40, 28));
+    }
+
+    #[test]
+    fn scales_down_when_height_binds() {
+        // 60 cols × 14 rows → height is half native, scale 0.5.
+        let (c, r) = fit_sprite_footprint(60, 14);
+        assert_eq!(r, 14);
+        assert!((19..=21).contains(&c), "expected ~20 cols, got {c}");
+    }
+
+    #[test]
+    fn scales_down_when_width_binds() {
+        let (c, r) = fit_sprite_footprint(20, 50);
+        assert_eq!(c, 20);
+        assert!((13..=15).contains(&r), "expected ~14 rows, got {r}");
+    }
+
+    #[test]
+    fn never_upscales() {
+        // Huge terminal: still cap at native.
+        let (c, r) = fit_sprite_footprint(500, 500);
+        assert_eq!((c, r), (40, 28));
+    }
+
+    #[test]
+    fn handles_zero_dimensions() {
+        let (c, r) = fit_sprite_footprint(0, 10);
+        assert_eq!((c, r), (1, 1));
     }
 }

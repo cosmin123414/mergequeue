@@ -1,96 +1,105 @@
 //! ratatui drawing.
 //!
-//! Layout (per `docs/08-tui-and-sprite.md`):
+//! Layout (deliberately minimal — no panel borders, no titles, just
+//! the smith and small text at the edges):
 //!
 //! ```text
-//! ┌─ MergeSmith ────────────────────────────────────────────────┐
-//! │ [sprite]   │ Queue                                          │
-//! │            │ status  branch          target    repo         │
-//! │ status     │ …                                              │
-//! ├────────────┴────────────────────────────────────────────────┤
-//! │ details                                                     │
-//! ├─────────────────────────────────────────────────────────────┤
-//! │ [↑↓ select]  [d delete-queued]  [? help]  [q quit]  [Q hard]│
-//! └─────────────────────────────────────────────────────────────┘
+//!   MergeSmith
+//!
+//!
+//!
+//!                  [stippled blacksmith]
+//!
+//!
+//!
+//!   ▶ feat/auth → main  · rebasing   queued: 3   needs help: 0
+//!   ↑↓ select   d delete   ? help   q quit
 //! ```
 //!
-//! The "sprite" panel is a reserved rectangle; we paint a dim
-//! background there in ratatui, then the [`crate::tui::sprite`] layer
-//! writes a Kitty place-command to stdout *after* the ratatui frame
-//! flushes, overwriting those cells with the actual sprite pixels.
+//! The sprite is the centerpiece and fills most of the available
+//! area. ratatui draws nothing in the sprite rect — the Kitty place
+//! command writes pixels there directly, overlaying the (empty) cells.
+//!
+//! Sizing rule: the sprite occupies all rows between the title row
+//! (top, 2 rows) and the footer (bottom, 3 rows), with a column
+//! margin on either side. We then constrain the on-screen footprint
+//! via Kitty's `c=` / `r=` keys so the terminal scales the image to
+//! match.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::core::queue::QueueStatus;
+use crate::core::queue::{QueueEntry, QueueStatus};
 use crate::tui::app::AppState;
+use crate::tui::sprite::state::SpriteState;
 
-/// Cells reserved for the sprite. 64×64 sprite ÷ (cell ≈ 8×16 px) ≈ 8
-/// cols × 4 rows; we add some padding and round to 12×6 for a nicer
-/// frame in the UI.
-pub const SPRITE_COLS: u16 = 12;
-pub const SPRITE_ROWS: u16 = 6;
+/// Number of rows reserved at the top for the brand line.
+pub const HEADER_ROWS: u16 = 2;
+/// Number of rows reserved at the bottom for the queue summary +
+/// keybind hints.
+pub const FOOTER_ROWS: u16 = 3;
+/// Horizontal margin around the sprite (in cells).
+pub const SPRITE_X_MARGIN: u16 = 4;
 
-/// The Kitty place command needs the sprite's cell-origin in
-/// (col, row). [`compute_layout`] returns this alongside the
-/// other rectangles so the render path is deterministic.
+/// Per-frame layout. The Kitty place command needs the sprite cell
+/// origin and dimensions; the rest of the rects are for ratatui's
+/// own widgets.
 #[derive(Debug, Clone, Copy)]
 pub struct DrawLayout {
     pub root: Rect,
+    pub header: Rect,
     pub sprite: Rect,
-    pub status_under_sprite: Rect,
-    pub queue: Rect,
-    pub details: Rect,
-    pub hints: Rect,
+    pub footer_status: Rect,
+    pub footer_hints: Rect,
 }
 
 pub fn compute_layout(area: Rect) -> DrawLayout {
-    // Three vertical sections: top (sprite + queue) | details | hints.
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(SPRITE_ROWS + 2), // sprite+status block
-            Constraint::Min(5),                  // details fills the rest
-            Constraint::Length(1),               // hints
+            Constraint::Length(HEADER_ROWS),
+            Constraint::Min(5),
+            Constraint::Length(FOOTER_ROWS),
         ])
         .split(area);
 
-    // Top section splits horizontally: sprite | queue.
-    let top = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(SPRITE_COLS + 4), // sprite + a status line under it
-            Constraint::Min(20),                 // queue fills the rest
-        ])
-        .split(outer[0]);
+    let header = outer[0];
+    let center = outer[1];
+    let footer = outer[2];
 
-    // Within the sprite column: the sprite cells on top, status line below.
-    let sprite_col = Layout::default()
+    // Sprite: center horizontally with a margin on each side.
+    let margin = SPRITE_X_MARGIN.min(center.width / 8);
+    let sprite_x = center.x + margin;
+    let sprite_w = center.width.saturating_sub(margin * 2);
+    let sprite = Rect::new(sprite_x, center.y, sprite_w, center.height);
+
+    // Footer: two rows for queue status / active line, one row for hints.
+    let footer_split = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(SPRITE_ROWS), Constraint::Min(1)])
-        .split(top[0]);
+        .constraints([Constraint::Length(2), Constraint::Length(1)])
+        .split(footer);
 
     DrawLayout {
         root: area,
-        sprite: sprite_col[0],
-        status_under_sprite: sprite_col[1],
-        queue: top[1],
-        details: outer[1],
-        hints: outer[2],
+        header,
+        sprite,
+        footer_status: footer_split[0],
+        footer_hints: footer_split[1],
     }
 }
 
 pub fn draw(frame: &mut Frame, app: &mut AppState) -> DrawLayout {
     let layout = compute_layout(frame.area());
 
-    draw_sprite_panel(frame, layout.sprite, app);
-    draw_status_under_sprite(frame, layout.status_under_sprite, app);
-    draw_queue(frame, layout.queue, app);
-    draw_details(frame, layout.details, app);
-    draw_hints(frame, layout.hints, app);
+    draw_header(frame, layout.header, app);
+    // The sprite rect is left empty for the Kitty layer to paint.
+    // We don't even fill it with blanks — terminal background covers
+    // it, and Kitty pixels land on top.
+    draw_footer_status(frame, layout.footer_status, app);
+    draw_footer_hints(frame, layout.footer_hints, app);
 
     if app.help_visible {
         draw_help_overlay(frame, layout.root);
@@ -99,165 +108,122 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) -> DrawLayout {
     layout
 }
 
-fn draw_sprite_panel(frame: &mut Frame, area: Rect, _app: &AppState) {
-    // A dim-block background that the Kitty place command will paint
-    // over. Looks intentional even before the sprite arrives.
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(
-            " smith ",
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
-        ));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    // Fill the inner area with shaded blocks so the panel doesn't look
-    // empty on terminals that strip the Kitty escape (the next render
-    // pass will overwrite this).
-    let filler = Paragraph::new(vec![
-        Line::from(Span::styled(
-            "  ░░░░░░░░  ",
-            Style::default().fg(Color::DarkGray),
-        ));
-        usize::from(inner.height)
-    ]);
-    frame.render_widget(filler, inner);
-}
-
-fn draw_status_under_sprite(frame: &mut Frame, area: Rect, app: &AppState) {
-    let elapsed = app.started_at.elapsed();
-    let mins = elapsed.as_secs() / 60;
-    let secs = elapsed.as_secs() % 60;
-    let label = match app.sprite_state {
-        crate::tui::sprite::state::SpriteState::Idle => "idle",
-        crate::tui::sprite::state::SpriteState::Working => "working",
-        crate::tui::sprite::state::SpriteState::NeedsHelp => "needs help",
-    };
-    let line = Line::from(vec![
-        Span::styled(label, Style::default().fg(Color::Cyan)),
-        Span::raw(format!("  {mins:02}:{secs:02} elapsed")),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
-}
-
-fn draw_queue(frame: &mut Frame, area: Rect, app: &mut AppState) {
-    let header = Row::new(vec!["status", "branch", "→ target", "repo"])
-        .style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
-        .height(1);
-
-    let rows: Vec<Row> = app
-        .entries
-        .iter()
-        .map(|e| {
-            let status_cell = Cell::from(status_label(e.status))
-                .style(Style::default().fg(status_color(e.status)));
-            Row::new(vec![
-                status_cell,
-                Cell::from(e.source_branch.clone()),
-                Cell::from(format!("→ {}", e.target_branch)),
-                Cell::from(short_repo(e)),
-            ])
-        })
-        .collect();
-
-    let widths = [
-        Constraint::Length(12),
-        Constraint::Min(16),
-        Constraint::Length(20),
-        Constraint::Length(12),
-    ];
-
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(Block::default().borders(Borders::ALL).title(Span::styled(
-            format!(" queue ({}) ", app.entries.len()),
-            Style::default().fg(Color::White),
-        )))
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
-
-    frame.render_stateful_widget(table, area, &mut app.table);
-}
-
-fn draw_details(frame: &mut Frame, area: Rect, app: &AppState) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(" details ", Style::default().fg(Color::White)));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let text = if let Some(e) = app.selected() {
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("id      ", Style::default().fg(Color::DarkGray)),
-                Span::raw(e.id.short()),
-            ]),
-            Line::from(vec![
-                Span::styled("status  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    status_label(e.status),
-                    Style::default().fg(status_color(e.status)),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("branch  ", Style::default().fg(Color::DarkGray)),
-                Span::raw(format!("{} → {}", e.source_branch, e.target_branch)),
-            ]),
-            Line::from(vec![
-                Span::styled("worktree", Style::default().fg(Color::DarkGray)),
-                Span::raw(format!(" {}", e.source_worktree.display())),
-            ]),
-        ];
-        if let Some(reason) = e.failure_reason {
-            lines.push(Line::from(vec![
-                Span::styled("reason  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(reason.to_string(), Style::default().fg(Color::Red)),
-            ]));
-        }
-        if let Some(msg) = &e.message {
-            lines.push(Line::from(vec![
-                Span::styled("message ", Style::default().fg(Color::DarkGray)),
-                Span::raw(msg.clone()),
-            ]));
-        }
-        Paragraph::new(lines)
-    } else {
-        Paragraph::new(Span::styled(
-            "(no entry selected)",
-            Style::default().fg(Color::DarkGray),
-        ))
-    };
-
-    frame.render_widget(text, inner);
-}
-
-fn draw_hints(frame: &mut Frame, area: Rect, app: &AppState) {
-    let hint = Line::from(vec![
-        hint_key("↑↓"),
-        Span::raw(" select   "),
-        hint_key("d"),
-        Span::raw(" delete-queued   "),
-        hint_key("?"),
-        Span::raw(" help   "),
-        hint_key("q"),
-        Span::raw(" quit   "),
-        hint_key("Q"),
-        Span::raw(" force   "),
+fn draw_header(frame: &mut Frame, area: Rect, _app: &AppState) {
+    // Tight to the top-left, no borders. We pad one column for breathing room.
+    let padded = Rect::new(
+        area.x + 2,
+        area.y,
+        area.width.saturating_sub(2),
+        area.height,
+    );
+    let title = Line::from(vec![
         Span::styled(
-            format!("· {}", app.status_line),
+            "MergeSmith",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  ·  local merge queue",
             Style::default().fg(Color::DarkGray),
         ),
     ]);
-    frame.render_widget(Paragraph::new(hint), area);
+    frame.render_widget(Paragraph::new(title), padded);
+}
+
+fn draw_footer_status(frame: &mut Frame, area: Rect, app: &AppState) {
+    let padded = Rect::new(
+        area.x + 2,
+        area.y,
+        area.width.saturating_sub(4),
+        area.height,
+    );
+
+    // Line 1: the currently-active entry, if any. We pick the first
+    // entry in a "currently working" status, else the head of the
+    // queue, else "idle".
+    let active = pick_active(&app.entries);
+    let line1 = match active {
+        Some(e) => Line::from(vec![
+            Span::styled("▶ ", Style::default().fg(Color::White)),
+            Span::styled(e.source_branch.clone(), Style::default().fg(Color::White)),
+            Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+            Span::styled(e.target_branch.clone(), Style::default().fg(Color::Gray)),
+            Span::styled("   ", Style::default()),
+            Span::styled(
+                status_phrase(e.status),
+                Style::default().fg(status_color(e.status)),
+            ),
+        ]),
+        None => Line::from(Span::styled(
+            "▷ idle — no entry in flight",
+            Style::default().fg(Color::DarkGray),
+        )),
+    };
+
+    // Line 2: counts.
+    let (queued, working, needs_help, terminal) = counts(&app.entries);
+    let smith_label = match app.sprite_state {
+        SpriteState::Idle => "smith: at rest",
+        SpriteState::Working => "smith: at the anvil",
+        SpriteState::NeedsHelp => "smith: needs your help",
+    };
+    let line2 = Line::from(vec![
+        Span::styled(
+            smith_label,
+            Style::default()
+                .fg(match app.sprite_state {
+                    SpriteState::Idle => Color::DarkGray,
+                    SpriteState::Working => Color::White,
+                    SpriteState::NeedsHelp => Color::Yellow,
+                })
+                .add_modifier(Modifier::DIM),
+        ),
+        Span::styled("    queued ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{queued}"), Style::default().fg(Color::Gray)),
+        Span::styled("    working ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{working}"), Style::default().fg(Color::White)),
+        Span::styled("    needs help ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{needs_help}"),
+            Style::default().fg(if needs_help > 0 {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            }),
+        ),
+        Span::styled("    done ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{terminal}"), Style::default().fg(Color::DarkGray)),
+    ]);
+
+    frame.render_widget(Paragraph::new(vec![line1, line2]), padded);
+}
+
+fn draw_footer_hints(frame: &mut Frame, area: Rect, app: &AppState) {
+    let padded = Rect::new(
+        area.x + 2,
+        area.y,
+        area.width.saturating_sub(4),
+        area.height,
+    );
+    let hint = Line::from(vec![
+        Span::styled("↑↓", Style::default().fg(Color::Gray)),
+        Span::styled(" select   ", Style::default().fg(Color::DarkGray)),
+        Span::styled("d", Style::default().fg(Color::Gray)),
+        Span::styled(" delete-queued   ", Style::default().fg(Color::DarkGray)),
+        Span::styled("?", Style::default().fg(Color::Gray)),
+        Span::styled(" help   ", Style::default().fg(Color::DarkGray)),
+        Span::styled("q", Style::default().fg(Color::Gray)),
+        Span::styled(" quit   ", Style::default().fg(Color::DarkGray)),
+        Span::styled("·  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            app.status_line.clone(),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(hint), padded);
 }
 
 fn draw_help_overlay(frame: &mut Frame, area: Rect) {
@@ -272,7 +238,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         .title(Span::styled(
             " help ",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(Color::Black));
@@ -294,34 +260,61 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-// --- helpers ---
+// ---------------------------------------------------------------------
+// Pure helpers — no ratatui types in/out, easy to test.
+// ---------------------------------------------------------------------
 
-fn hint_key(s: &str) -> Span<'static> {
-    Span::styled(
-        format!("[{s}]"),
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )
+fn pick_active(entries: &[QueueEntry]) -> Option<&QueueEntry> {
+    // Prefer NeedsHelp (it's the only state asking for the user).
+    // Then in-flight statuses. Then the head of the queue. Terminal
+    // statuses are ignored — they're not "active" anything.
+    fn pri(s: QueueStatus) -> Option<u8> {
+        match s {
+            QueueStatus::NeedsHelp => Some(0),
+            QueueStatus::Rebasing | QueueStatus::CIRunning | QueueStatus::Merging => Some(1),
+            QueueStatus::Queued => Some(2),
+            _ => None,
+        }
+    }
+    entries
+        .iter()
+        .filter(|e| pri(e.status).is_some())
+        .min_by_key(|e| pri(e.status).unwrap_or(u8::MAX))
 }
 
-fn status_label(s: QueueStatus) -> &'static str {
+fn counts(entries: &[QueueEntry]) -> (u32, u32, u32, u32) {
+    let mut queued = 0;
+    let mut working = 0;
+    let mut needs_help = 0;
+    let mut terminal = 0;
+    for e in entries {
+        match e.status {
+            QueueStatus::Queued => queued += 1,
+            QueueStatus::Rebasing | QueueStatus::CIRunning | QueueStatus::Merging => working += 1,
+            QueueStatus::NeedsHelp => needs_help += 1,
+            QueueStatus::Merged | QueueStatus::Failed | QueueStatus::Cancelled => terminal += 1,
+        }
+    }
+    (queued, working, needs_help, terminal)
+}
+
+fn status_phrase(s: QueueStatus) -> &'static str {
     match s {
-        QueueStatus::Queued => "Queued",
-        QueueStatus::Rebasing => "Rebasing",
-        QueueStatus::CIRunning => "CI",
-        QueueStatus::Merging => "Merging",
-        QueueStatus::NeedsHelp => "NeedsHelp",
-        QueueStatus::Merged => "Merged",
-        QueueStatus::Failed => "Failed",
-        QueueStatus::Cancelled => "Cancelled",
+        QueueStatus::Queued => "queued",
+        QueueStatus::Rebasing => "rebasing",
+        QueueStatus::CIRunning => "running CI",
+        QueueStatus::Merging => "merging",
+        QueueStatus::NeedsHelp => "needs help",
+        QueueStatus::Merged => "merged",
+        QueueStatus::Failed => "failed",
+        QueueStatus::Cancelled => "cancelled",
     }
 }
 
 fn status_color(s: QueueStatus) -> Color {
     match s {
         QueueStatus::Queued => Color::Gray,
-        QueueStatus::Rebasing | QueueStatus::Merging => Color::Cyan,
+        QueueStatus::Rebasing | QueueStatus::Merging => Color::White,
         QueueStatus::CIRunning => Color::LightBlue,
         QueueStatus::NeedsHelp => Color::Yellow,
         QueueStatus::Merged => Color::Green,
@@ -330,37 +323,112 @@ fn status_color(s: QueueStatus) -> Color {
     }
 }
 
-fn short_repo(e: &crate::core::queue::QueueEntry) -> String {
-    // No repo name in scope here; use the repo id's short form.
-    e.repo_id.short()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ids::{QueueEntryId, RepoId};
+    use crate::core::queue::QueueEntry;
+    use time::OffsetDateTime;
+
+    fn entry(status: QueueStatus, branch: &str) -> QueueEntry {
+        QueueEntry {
+            id: QueueEntryId::new(),
+            repo_id: RepoId::new(),
+            source_worktree: "/tmp/x".into(),
+            source_branch: branch.into(),
+            target_branch: "main".into(),
+            status,
+            last_outcome: None,
+            enqueued_at: OffsetDateTime::from_unix_timestamp(1).unwrap(),
+            started_at: None,
+            finished_at: None,
+            failure_reason: None,
+            ci_log_dir: None,
+            merge_log_path: None,
+            conflict_session_id: None,
+            message: None,
+            claimed_by_pid: None,
+            claimed_at: None,
+        }
+    }
 
     #[test]
-    fn layout_reserves_sprite_in_top_left() {
+    fn layout_reserves_header_and_footer() {
         let area = Rect::new(0, 0, 100, 30);
         let l = compute_layout(area);
-        assert_eq!(l.sprite.x, 0);
-        assert_eq!(l.sprite.y, 0);
-        assert_eq!(l.sprite.width, SPRITE_COLS + 4);
-        // Sprite-row height (the inner part is SPRITE_ROWS).
-        assert_eq!(l.sprite.height, SPRITE_ROWS);
-        // Queue starts to the right of the sprite column.
-        assert_eq!(l.queue.x, SPRITE_COLS + 4);
-        // Hints are exactly one row at the bottom.
-        assert_eq!(l.hints.height, 1);
-        assert_eq!(l.hints.y + l.hints.height, area.y + area.height);
+        assert_eq!(l.header.height, HEADER_ROWS);
+        assert_eq!(l.footer_status.height + l.footer_hints.height, FOOTER_ROWS);
+        // Sprite fills everything in between, minus side margins.
+        assert_eq!(l.sprite.height, area.height - HEADER_ROWS - FOOTER_ROWS);
+        assert!(l.sprite.x > area.x, "sprite should have a left margin");
+        assert!(
+            l.sprite.x + l.sprite.width <= area.x + area.width,
+            "sprite must fit horizontally"
+        );
     }
 
     #[test]
     fn layout_survives_small_screens() {
-        // 30x10 is well below the comfortable size but should not panic.
-        let area = Rect::new(0, 0, 30, 10);
+        let area = Rect::new(0, 0, 20, 8);
         let l = compute_layout(area);
-        assert!(l.queue.width > 0);
-        assert!(l.details.height >= 1);
+        assert!(l.sprite.width > 0);
+        assert!(l.sprite.height >= 1);
+    }
+
+    #[test]
+    fn pick_active_prefers_needs_help() {
+        let entries = vec![
+            entry(QueueStatus::Queued, "a"),
+            entry(QueueStatus::Rebasing, "b"),
+            entry(QueueStatus::NeedsHelp, "c"),
+        ];
+        assert_eq!(pick_active(&entries).unwrap().source_branch, "c");
+    }
+
+    #[test]
+    fn pick_active_prefers_in_flight_over_queued() {
+        let entries = vec![
+            entry(QueueStatus::Queued, "a"),
+            entry(QueueStatus::CIRunning, "b"),
+        ];
+        assert_eq!(pick_active(&entries).unwrap().source_branch, "b");
+    }
+
+    #[test]
+    fn pick_active_falls_back_to_queued() {
+        let entries = vec![
+            entry(QueueStatus::Merged, "a"),
+            entry(QueueStatus::Queued, "b"),
+        ];
+        assert_eq!(pick_active(&entries).unwrap().source_branch, "b");
+    }
+
+    #[test]
+    fn pick_active_none_on_only_terminal() {
+        let entries = vec![
+            entry(QueueStatus::Merged, "a"),
+            entry(QueueStatus::Failed, "b"),
+            entry(QueueStatus::Cancelled, "c"),
+        ];
+        assert!(pick_active(&entries).is_none());
+    }
+
+    #[test]
+    fn counts_partition_correctly() {
+        let entries = vec![
+            entry(QueueStatus::Queued, "a"),
+            entry(QueueStatus::Queued, "b"),
+            entry(QueueStatus::Rebasing, "c"),
+            entry(QueueStatus::CIRunning, "d"),
+            entry(QueueStatus::NeedsHelp, "e"),
+            entry(QueueStatus::Merged, "f"),
+            entry(QueueStatus::Failed, "g"),
+            entry(QueueStatus::Cancelled, "h"),
+        ];
+        let (q, w, n, t) = counts(&entries);
+        assert_eq!(q, 2);
+        assert_eq!(w, 2);
+        assert_eq!(n, 1);
+        assert_eq!(t, 3);
     }
 }
