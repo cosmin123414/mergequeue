@@ -2,7 +2,7 @@
 //! consumes one entry from a pre-programmed queue or returns the
 //! default for that method.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -11,7 +11,13 @@ use crate::error::Result;
 
 #[derive(Default)]
 pub struct GitScript {
+    /// Per-call boolean queue for `worktree_is_dirty`. Consulted first;
+    /// when empty, `always_dirty_paths` is checked.
     pub dirty: VecDeque<bool>,
+    /// Paths that should always report dirty. Useful when two workers
+    /// share a `FakeGit` and we want to pin per-worktree behavior
+    /// independent of call order.
+    pub always_dirty_paths: HashSet<PathBuf>,
     pub rebase: VecDeque<RebaseOutcome>,
     pub fast_forward: VecDeque<FastForwardOutcome>,
     pub worktree_exists: VecDeque<bool>,
@@ -52,13 +58,11 @@ impl FakeGit {
 impl GitOps for FakeGit {
     fn worktree_is_dirty(&self, path: &Path) -> Result<bool> {
         self.record(format!("worktree_is_dirty({})", path.display()));
-        Ok(self
-            .script
-            .lock()
-            .unwrap()
-            .dirty
-            .pop_front()
-            .unwrap_or(false))
+        let mut g = self.script.lock().unwrap();
+        if let Some(v) = g.dirty.pop_front() {
+            return Ok(v);
+        }
+        Ok(g.always_dirty_paths.contains(path))
     }
 
     fn current_branch(&self, worktree: &Path) -> Result<String> {

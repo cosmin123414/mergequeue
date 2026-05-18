@@ -319,6 +319,304 @@ fn ci_lint_failure_short_circuits() {
     assert!(!entry_dir.join("ci-build.log").exists());
 }
 
+// ---------------------------------------------------------------------
+// Pool tests (M3): live reconciliation + parallel execution.
+// ---------------------------------------------------------------------
+
+mod pool_tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use tempfile::TempDir;
+    use time::OffsetDateTime;
+
+    use crate::agents::tmux::TmuxOps;
+    use crate::core::agent_backend::AgentBackend;
+    use crate::core::ids::{QueueEntryId, RepoId};
+    use crate::core::ports::{
+        AgentRegistry, FastForwardOutcome, GitOps, QueueStore, RebaseOutcome,
+    };
+    use crate::core::queue::{QueueEntry, QueueStatus};
+    use crate::core::repo::{RegisteredRepo, RepoCiConfig};
+    use crate::engine::events::EventBroadcaster;
+    use crate::engine::pool::{EnginePool, PoolDeps};
+    use crate::store::SystemClock;
+    use crate::test_support::{
+        fake_store::make_fake_store, FakeAgent, FakeAgentRegistry, FakeGit, FakeTmux, GitScript,
+    };
+
+    /// Spin loop that polls `cond` every `step` until it's true or
+    /// `timeout` elapses. Returns true if `cond` became true.
+    fn wait_until(timeout: Duration, step: Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(step);
+        }
+        cond()
+    }
+
+    fn pool_deps(
+        store: Arc<dyn QueueStore>,
+        git: Arc<dyn GitOps>,
+        runs: std::path::PathBuf,
+    ) -> PoolDeps {
+        let tmux: Arc<FakeTmux> = Arc::new(FakeTmux::new());
+        let tmux_ops: Arc<dyn TmuxOps> = tmux.clone();
+        let agent = Arc::new(FakeAgent::new(AgentBackend::Opencode));
+        let agents: Arc<dyn AgentRegistry> = Arc::new(FakeAgentRegistry::new(agent));
+        PoolDeps {
+            store,
+            git,
+            // Real clock here: pool workers `sleep` between polls and a
+            // FakeClock would return instantly, busy-spinning. Real
+            // clock with a tiny `poll_interval` keeps the test snappy
+            // without hammering CPU.
+            clock: Arc::new(SystemClock::new()),
+            events: Arc::new(EventBroadcaster::new()),
+            runs_dir: runs,
+            poll_interval: Duration::from_millis(5),
+            tmux: tmux_ops,
+            agents,
+            tmux_session_pid: 9999,
+        }
+    }
+
+    fn make_repo(root: std::path::PathBuf) -> RegisteredRepo {
+        let now = OffsetDateTime::now_utc();
+        RegisteredRepo {
+            id: RepoId::new(),
+            root_path: root,
+            default_branch: "main".into(),
+            ci: RepoCiConfig::default(),
+            agent_backend: AgentBackend::Opencode,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn make_entry(repo: &RegisteredRepo, branch: &str) -> QueueEntry {
+        QueueEntry {
+            id: QueueEntryId::new(),
+            repo_id: repo.id,
+            source_worktree: repo.root_path.clone(),
+            source_branch: branch.into(),
+            target_branch: repo.default_branch.clone(),
+            status: QueueStatus::Queued,
+            last_outcome: None,
+            enqueued_at: OffsetDateTime::now_utc(),
+            started_at: None,
+            finished_at: None,
+            failure_reason: None,
+            ci_log_dir: None,
+            merge_log_path: None,
+            conflict_session_id: None,
+            message: None,
+            claimed_by_pid: None,
+            claimed_at: None,
+        }
+    }
+
+    /// `reconcile` adds workers for every repo currently registered,
+    /// and `worker_count` reflects the result.
+    #[test]
+    fn reconcile_spawns_one_worker_per_repo() {
+        let tmp = TempDir::new().unwrap();
+        let store: Arc<dyn QueueStore> = Arc::new(make_fake_store());
+        let r1 = make_repo(tmp.path().to_path_buf());
+        let r2 = make_repo(tmp.path().to_path_buf());
+        // Both repos refer to the same root in test fixtures, but
+        // `insert_repo` rejects duplicate roots, so we tweak the second.
+        let r2 = RegisteredRepo {
+            root_path: tmp.path().join("second"),
+            ..r2
+        };
+        store.insert_repo(&r1).unwrap();
+        store.insert_repo(&r2).unwrap();
+
+        let pool = EnginePool::new(pool_deps(
+            store.clone(),
+            Arc::new(FakeGit::new(GitScript::new())),
+            tmp.path().to_path_buf(),
+        ));
+        let report = pool.reconcile().unwrap();
+        assert_eq!(pool.worker_count(), 2);
+        assert_eq!(report.started.len(), 2);
+        assert!(report.stopped.is_empty());
+
+        // Second reconcile is a no-op.
+        let report = pool.reconcile().unwrap();
+        assert!(report.started.is_empty());
+        assert!(report.stopped.is_empty());
+
+        pool.shutdown_and_join();
+    }
+
+    /// Removing a repo from the store causes `reconcile` to stop and
+    /// join the corresponding worker.
+    #[test]
+    fn reconcile_stops_worker_for_removed_repo() {
+        let tmp = TempDir::new().unwrap();
+        let store: Arc<dyn QueueStore> = Arc::new(make_fake_store());
+        let r1 = make_repo(tmp.path().to_path_buf());
+        store.insert_repo(&r1).unwrap();
+
+        let pool = EnginePool::new(pool_deps(
+            store.clone(),
+            Arc::new(FakeGit::new(GitScript::new())),
+            tmp.path().to_path_buf(),
+        ));
+        pool.reconcile().unwrap();
+        assert_eq!(pool.worker_count(), 1);
+
+        store.delete_repo(r1.id).unwrap();
+        let report = pool.reconcile().unwrap();
+        assert_eq!(report.stopped, vec![r1.id]);
+        assert_eq!(pool.worker_count(), 0);
+
+        pool.shutdown_and_join();
+    }
+
+    /// Two repos enqueue work in parallel. Both entries finish.
+    ///
+    /// This test exercises the `Mutex<Connection>` in SqliteStore under
+    /// thread contention and verifies that one worker doesn't block the
+    /// other's claims.
+    #[test]
+    fn two_repos_make_progress_in_parallel() {
+        let tmp = TempDir::new().unwrap();
+        let store: Arc<dyn QueueStore> = Arc::new(make_fake_store());
+        let r1 = make_repo(tmp.path().join("r1"));
+        let r2 = make_repo(tmp.path().join("r2"));
+        store.insert_repo(&r1).unwrap();
+        store.insert_repo(&r2).unwrap();
+
+        let e1 = make_entry(&r1, "feat/r1-a");
+        let e2 = make_entry(&r2, "feat/r2-a");
+        store.enqueue(&e1).unwrap();
+        store.enqueue(&e2).unwrap();
+
+        // FakeGit returns Ok for everything by default → clean FF merges.
+        let git: Arc<dyn GitOps> = Arc::new(FakeGit::new(GitScript {
+            // Pre-load two of each since two entries each need one rebase
+            // and one fast-forward.
+            rebase: vec![RebaseOutcome::Ok, RebaseOutcome::Ok].into(),
+            fast_forward: vec![FastForwardOutcome::Ok, FastForwardOutcome::Ok].into(),
+            ..GitScript::new()
+        }));
+
+        let pool = EnginePool::new(pool_deps(store.clone(), git, tmp.path().to_path_buf()));
+        pool.reconcile().unwrap();
+        assert_eq!(pool.worker_count(), 2);
+
+        let store_for_poll = store.clone();
+        let both_merged = wait_until(Duration::from_secs(5), Duration::from_millis(10), || {
+            let after1 = store_for_poll.get_entry(e1.id).ok().flatten();
+            let after2 = store_for_poll.get_entry(e2.id).ok().flatten();
+            matches!(
+                (after1, after2),
+                (Some(a), Some(b)) if a.status == QueueStatus::Merged && b.status == QueueStatus::Merged
+            )
+        });
+        pool.shutdown_and_join();
+        assert!(both_merged, "expected both entries to reach Merged");
+    }
+
+    /// One repo's worker is stuck sleeping on `PrecheckDirtyTarget`; the
+    /// other repo's worker still processes its queue. Demonstrates that
+    /// per-repo dirty-target retry doesn't block the rest of the pool.
+    #[test]
+    fn dirty_target_on_one_repo_does_not_stall_the_other() {
+        let tmp = TempDir::new().unwrap();
+        let store: Arc<dyn QueueStore> = Arc::new(make_fake_store());
+
+        // r1: always-dirty → its worker keeps looping on PrecheckDirtyTarget.
+        // r2: clean → its worker FFs cleanly.
+        let r1 = RegisteredRepo {
+            ci: RepoCiConfig {
+                // Tiny retry so the dirty-worker loops quickly, exercising
+                // the retry path without slowing the test.
+                dirty_retry: Duration::from_millis(20),
+                ..Default::default()
+            },
+            ..make_repo(tmp.path().join("r1"))
+        };
+        let r2 = make_repo(tmp.path().join("r2"));
+        store.insert_repo(&r1).unwrap();
+        store.insert_repo(&r2).unwrap();
+
+        let e1 = make_entry(&r1, "feat/dirty");
+        let e2 = make_entry(&r2, "feat/clean");
+        store.enqueue(&e1).unwrap();
+        store.enqueue(&e2).unwrap();
+
+        // Both workers share a single FakeGit, so we use the
+        // `always_dirty_paths` set (path-keyed, not call-order-keyed)
+        // to pin r1's root as always-dirty. r2's path is absent so it
+        // reports clean and proceeds through the FSM.
+        let mut always_dirty = std::collections::HashSet::new();
+        always_dirty.insert(r1.root_path.clone());
+        let git: Arc<dyn GitOps> = Arc::new(FakeGit::new(GitScript {
+            always_dirty_paths: always_dirty,
+            rebase: vec![RebaseOutcome::Ok].into(),
+            fast_forward: vec![FastForwardOutcome::Ok].into(),
+            ..GitScript::new()
+        }));
+
+        let pool = EnginePool::new(pool_deps(store.clone(), git, tmp.path().to_path_buf()));
+        pool.reconcile().unwrap();
+
+        let store_for_poll = store.clone();
+        let e2_done = wait_until(Duration::from_secs(5), Duration::from_millis(10), || {
+            store_for_poll
+                .get_entry(e2.id)
+                .ok()
+                .flatten()
+                .is_some_and(|e| e.status == QueueStatus::Merged)
+        });
+
+        // r1's entry should still be Queued (worker keeps rolling it
+        // back). It must NOT have advanced past Queued.
+        let r1_entry = store.get_entry(e1.id).unwrap().unwrap();
+        pool.shutdown_and_join();
+
+        assert!(
+            e2_done,
+            "r2's entry did not merge despite r1 being stuck on dirty"
+        );
+        assert_eq!(
+            r1_entry.status,
+            QueueStatus::Queued,
+            "r1's entry should still be Queued (dirty-target retry rolled it back)"
+        );
+    }
+
+    /// After `shutdown_and_join`, `reconcile` is still callable but
+    /// won't spin up new workers. (Defensive — protects against a TUI
+    /// that calls reconcile() in a tick during shutdown.)
+    #[test]
+    fn reconcile_after_shutdown_is_inert() {
+        let tmp = TempDir::new().unwrap();
+        let store: Arc<dyn QueueStore> = Arc::new(make_fake_store());
+        let r1 = make_repo(tmp.path().to_path_buf());
+        store.insert_repo(&r1).unwrap();
+
+        let pool = EnginePool::new(pool_deps(
+            store.clone(),
+            Arc::new(FakeGit::new(GitScript::new())),
+            tmp.path().to_path_buf(),
+        ));
+        // Signal shutdown BEFORE reconciling.
+        pool.shutdown_token().set_soft();
+        let report = pool.reconcile().unwrap();
+        assert!(report.started.is_empty());
+        assert_eq!(pool.worker_count(), 0);
+        pool.shutdown_and_join();
+    }
+}
+
 /// Full CI happy path: lint → test → build → FF.
 #[test]
 fn ci_all_steps_pass_then_merges() {

@@ -18,6 +18,6 @@ pub mod worker;
 mod tests;
 
 pub use events::{EventBroadcaster, EventSubscriber};
-pub use pool::EnginePool;
+pub use pool::{EnginePool, PoolDeps, Reconciliation};
 pub use shutdown::{ShutdownLevel, ShutdownToken};
 pub use worker::{Worker, WorkerDeps};

@@ -98,11 +98,30 @@ to resolve and re-enqueue via `mergesmith retry <id>`.
 
 ## Per-repo workers
 
-`EnginePool::spawn` looks at the current `registered_repos` table and
-spawns one `Worker` thread per row. `on_repo_registered(repo_id)` and
-`on_repo_deregistered(repo_id)` adjust the pool live when the CLI mutates
-the repo set. The pool keeps a `JoinHandle` per worker; shutdown joins
-them all with timeout.
+`EnginePool::new(PoolDeps)` builds an empty pool. The TUI render loop
+calls `pool.reconcile()` periodically (once per tick is fine — it's
+cheap when there's nothing to change). Reconciliation:
+
+- Reads `store.list_repos()`.
+- Spawns a `Worker` thread for every repo not already running.
+- Stops + joins the worker for every running repo no longer in the store.
+- Returns a `Reconciliation { started, stopped }` for logging.
+
+Each worker observes two shutdown sources at once via
+`ShutdownToken::merged`: its own per-repo token (lets `reconcile`
+drop one worker without bringing the pool down) and the pool-global
+token (lets the TUI's quit handler stop everything atomically).
+
+Two workers for two different repos:
+
+- Share the `Arc<dyn QueueStore>`; the store serializes its
+  `Mutex<Connection>` per call, but workers do not hold it during
+  long-running git/CI ops, so this is not a bottleneck.
+- Use independent `claim_next(repo_id, …)` queries; one repo's queue
+  cannot starve another.
+- A dirty target on repo A makes A's worker sleep `dirty_retry`; B's
+  worker keeps processing its own queue. Verified by
+  `engine::tests::pool_tests::dirty_target_on_one_repo_does_not_stall_the_other`.
 
 ## Shutdown
 
