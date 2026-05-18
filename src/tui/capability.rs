@@ -114,17 +114,22 @@ pub fn probe_io<R: Read, W: Write>(
 }
 
 /// Probe stdin/stdout with appropriate terminal-mode handling.
+///
+/// Reads raw bytes from stdin's fd via `poll(2)` rather than going
+/// through `crossterm::event::poll`. The crossterm event loop parses
+/// stdin into its own `Event` taxonomy (keys, mouse, resize, …) and
+/// **silently discards** anything it doesn't recognize. A Kitty
+/// graphics ACK is an APC envelope crossterm has no opinion on, so
+/// going through `event::poll` loses the reply and we always time
+/// out. The `libc::poll` syscall lets us wait on the raw fd and then
+/// read the bytes ourselves before any cooked-event parsing happens.
+///
 /// Caller is responsible for not invoking this twice in a row from
-/// the same process (the second call's raw-mode toggle is harmless
-/// but wasteful).
+/// the same process.
 pub fn probe_stdin(timeout: Duration) -> Result<KittySupport> {
     let _guard = RawModeGuard::enable()?;
     let tmux = std::env::var_os("TMUX").is_some();
 
-    // crossterm's `event::poll` is the right way to wait on stdin
-    // without going non-blocking. We poll for input, then drain it
-    // synchronously when ready. Within a budget, we accumulate bytes
-    // and check for a match.
     let envelope = kitty::serialize_probe(PROBE_IMAGE_ID);
     let envelope = if tmux {
         kitty::wrap_for_tmux(&envelope)
@@ -141,37 +146,96 @@ pub fn probe_stdin(timeout: Duration) -> Result<KittySupport> {
             .map_err(|e| Error::other(format!("flush probe: {e}")))?;
     }
 
+    read_until_ack_or_deadline(timeout)
+}
+
+/// Unix path: wait on fd 0 with `poll(2)` (via the safe `nix`
+/// wrapper), then `read(2)` whatever's pending. Loops until we see
+/// an ACK or the deadline passes.
+///
+/// `Result` is kept for symmetry with `probe_stdin`'s signature and
+/// the future possibility of returning `Err` (e.g. if we add a
+/// "probe failed unexpectedly" branch distinct from "terminal said
+/// no").
+#[allow(clippy::unnecessary_wraps)]
+#[cfg(unix)]
+fn read_until_ack_or_deadline(timeout: Duration) -> Result<KittySupport> {
+    use std::io::{stdin, Read};
+    use std::os::fd::{AsFd, BorrowedFd};
+
+    use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+
     let deadline = Instant::now() + timeout;
+    let stdin_handle = stdin();
+    let borrowed: BorrowedFd<'_> = stdin_handle.as_fd();
     let mut buf = Vec::with_capacity(128);
+
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        // Poll for *any* event up to the remaining budget. We don't
-        // use crossterm's event abstraction (which would parse the
-        // bytes into key events) because we want raw APC bytes.
-        // Instead we let crossterm just signal availability and then
-        // read from stdin directly.
-        match crossterm::event::poll(remaining) {
-            Ok(true) => {
-                // Drain whatever events crossterm parsed — they're
-                // junk for our purposes, but they correspond to bytes
-                // already consumed from stdin. To avoid losing the
-                // APC reply we read from stdin ourselves before
-                // crossterm can swallow it. In practice crossterm's
-                // poll returns true precisely because raw bytes are
-                // available; we read them ourselves.
-                use std::io::{stdin, Read};
-                let mut chunk = [0u8; 128];
-                match stdin().read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        buf.extend_from_slice(&chunk[..n]);
-                        if kitty::parse_probe_ack(&buf, PROBE_IMAGE_ID) {
-                            return Ok(KittySupport::Supported);
-                        }
-                    }
+        if remaining.is_zero() {
+            break;
+        }
+        let timeout_ms =
+            u16::try_from(remaining.as_millis().min(u128::from(u16::MAX))).unwrap_or(u16::MAX);
+        let mut fds = [PollFd::new(borrowed, PollFlags::POLLIN)];
+        match poll(&mut fds, PollTimeout::from(timeout_ms)) {
+            Ok(0) => break, // budget elapsed
+            Ok(_) => {}
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(_) => return Ok(KittySupport::Unsupported),
+        }
+        let revents = fds[0].revents().unwrap_or(PollFlags::empty());
+        if !revents.contains(PollFlags::POLLIN) {
+            // POLLHUP / POLLERR / POLLNVAL — give up.
+            return Ok(KittySupport::Unsupported);
+        }
+        let mut chunk = [0u8; 256];
+        match stdin().read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if kitty::parse_probe_ack(&buf, PROBE_IMAGE_ID) {
+                    return Ok(KittySupport::Supported);
                 }
             }
-            Ok(false) | Err(_) => return Ok(KittySupport::Unsupported),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    Ok(KittySupport::Unsupported)
+}
+
+/// Windows fallback: there's no `poll(2)` on the stdin handle in a
+/// portable way without going through the Console API. For M4 we
+/// take the simple path — read in a thread with a deadline — which
+/// is good enough since Windows Terminal doesn't speak the Kitty
+/// protocol anyway and the probe will time out either way.
+#[allow(clippy::unnecessary_wraps)]
+#[cfg(not(unix))]
+fn read_until_ack_or_deadline(timeout: Duration) -> Result<KittySupport> {
+    use std::io::{stdin, Read};
+    use std::sync::mpsc;
+    use std::thread;
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    thread::spawn(move || {
+        let mut buf = [0u8; 256];
+        if let Ok(n) = stdin().read(&mut buf) {
+            let _ = tx.send(buf[..n].to_vec());
+        }
+    });
+    let mut acc = Vec::new();
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(remaining) {
+            Ok(bytes) => {
+                acc.extend_from_slice(&bytes);
+                if kitty::parse_probe_ack(&acc, PROBE_IMAGE_ID) {
+                    return Ok(KittySupport::Supported);
+                }
+            }
+            Err(_) => break,
         }
     }
     Ok(KittySupport::Unsupported)
