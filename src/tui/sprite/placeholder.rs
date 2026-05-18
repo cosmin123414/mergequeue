@@ -84,17 +84,16 @@ impl SpriteSheet {
 // ---------------------------------------------------------------------
 
 type Rgba = [u8; 4];
-const BLACK: Rgba = [0, 0, 0, 255];
 const WHITE: Rgba = [240, 240, 235, 255]; // very-slightly-warm white
 const DIM: Rgba = [110, 110, 105, 255];
 const EMBER: Rgba = [255, 180, 90, 255]; // forge ember orange — used sparingly
 
 fn render_rgba() -> Vec<u8> {
+    // Fully transparent background (alpha = 0). Pixels we paint
+    // become opaque where the stipple lands; everything else lets
+    // the terminal background show through, so the smith doesn't
+    // render as a hard black rectangle on non-black terminals.
     let mut buf = vec![0u8; (SHEET_W * SHEET_H * 4) as usize];
-    // Black background.
-    for chunk in buf.chunks_exact_mut(4) {
-        chunk.copy_from_slice(&BLACK);
-    }
 
     for row_idx in 0..3 {
         let state = match row_idx {
