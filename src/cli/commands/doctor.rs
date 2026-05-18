@@ -60,9 +60,46 @@ pub fn run() -> Result<ExitCode> {
         println!("[⚠] no agent CLIs detected; NeedsHelp entries will be unattended");
     }
 
+    // Kitty graphics: best-effort probe. We don't fail doctor on a
+    // missing graphics terminal — `mergesmith doctor` should be usable
+    // from non-Kitty shells. Just report.
+    probe_kitty_for_doctor();
+
+    // tmux passthrough warning: if we're inside tmux, remind the user
+    // to enable allow-passthrough. We can't programmatically read tmux
+    // config without shelling out; we just print the hint.
+    if std::env::var_os("TMUX").is_some() {
+        println!("[•] inside tmux: ensure `set -g allow-passthrough on` is in your tmux config");
+    }
+
     if all_ok {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
+}
+
+fn probe_kitty_for_doctor() {
+    // The probe needs raw mode + stdin reads. If we're not attached
+    // to a TTY (e.g. piping `mergesmith doctor` into a file), skip.
+    if !is_tty() {
+        println!("[•] kitty graphics probe skipped (stdin not a TTY)");
+        return;
+    }
+    match crate::tui::capability::probe_stdin(crate::tui::capability::PROBE_TIMEOUT) {
+        Ok(crate::tui::capability::KittySupport::Supported) => {
+            println!("[✓] terminal speaks the Kitty graphics protocol");
+        }
+        Ok(crate::tui::capability::KittySupport::Unsupported) => {
+            println!("[⚠] terminal does NOT speak the Kitty graphics protocol; the TUI will refuse to open");
+        }
+        Err(e) => {
+            println!("[•] kitty graphics probe failed: {e}");
+        }
+    }
+}
+
+fn is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }

@@ -45,6 +45,12 @@ crossbeam-channel = "0.5"
 # Agents
 minijinja = "2"
 
+# TUI
+ratatui = "0.28"
+crossterm = "0.28"
+base64 = "0.22"
+png = "0.17"
+
 # Misc
 which = "6"
 

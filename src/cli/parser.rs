@@ -16,6 +16,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Open the animated TUI (also the default when no subcommand
+    /// is given).
+    Tui,
     /// Register the current repo with MergeSmith.
     Init(InitArgs),
     /// Queue the current worktree for merge.

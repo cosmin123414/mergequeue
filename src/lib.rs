@@ -15,6 +15,7 @@ pub mod error;
 pub mod git;
 pub mod paths;
 pub mod store;
+pub mod tui;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

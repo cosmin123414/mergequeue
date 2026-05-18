@@ -9,6 +9,7 @@ mod repos;
 mod resolve;
 mod retry;
 mod status;
+mod tui;
 
 use std::process::ExitCode;
 
@@ -17,13 +18,8 @@ use crate::error::Result;
 
 pub fn dispatch(cli: Cli) -> Result<ExitCode> {
     match cli.command {
-        None => {
-            // Bare `mergesmith` would launch the TUI; in M1 we print
-            // help with a friendly note that the TUI lands in M4.
-            eprintln!("mergesmith: TUI not implemented yet (planned for M4).");
-            eprintln!("Run `mergesmith --help` for available subcommands.");
-            Ok(ExitCode::from(2))
-        }
+        // Bare `mergesmith` aliases `mergesmith tui` (per `docs/07-cli.md`).
+        None | Some(Command::Tui) => tui::run(),
         Some(Command::Init(a)) => init::run(a),
         Some(Command::Enqueue(a)) => enqueue::run(a),
         Some(Command::Status(a)) => status::run(a),
