@@ -1,0 +1,79 @@
+[package]
+name = "mergesmith"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "A local merge queue with a pixel-art blacksmith"
+repository = "https://github.com/mergesmith/mergesmith"
+
+[[bin]]
+name = "mergesmith"
+path = "src/main.rs"
+
+[lib]
+name = "mergesmith"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Exposes `mergesmith::test_support::*` to integration tests under tests/.
+test-support = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "1"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Store
+rusqlite = { version = "0.31", features = ["bundled", "time", "uuid"] }
+fs2 = "0.4"
+sysinfo = "0.30"
+
+# CLI
+clap = { version = "4", features = ["derive", "wrap_help"] }
+
+# Engine
+crossbeam-channel = "0.5"
+
+# Misc
+which = "6"
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Pragmatic exceptions.
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+return_self_not_must_use = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
+# Doc-markdown is aggressive in pedantic mode; we keep prose readable.
+doc_markdown = "allow"
+# `passed by value but not consumed` and `passed by reference but would be more
+# efficient by value` for `Copy` newtypes are stylistic; consistency wins.
+needless_pass_by_value = "allow"
+trivially_copy_pass_by_ref = "allow"
