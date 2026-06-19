@@ -11,7 +11,7 @@
   <img alt="Rust" src="https://img.shields.io/badge/rust-2021-orange?style=flat-square">
 </p>
 
-https://github.com/cosmin123414/mergequeue/releases/download/v0.0.0-media/mergequeue-demo.mp4
+https://github.com/user-attachments/assets/ecce6fbb-f65b-4f8a-9c6c-0c5aeed5e1ea
 
 ---
 
