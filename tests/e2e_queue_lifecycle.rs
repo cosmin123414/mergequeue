@@ -125,3 +125,121 @@ fn worker_merges_a_clean_fast_forward() {
     // Verify the actual git state: main should now have b.txt.
     assert!(repo_dir.path().join("b.txt").exists());
 }
+
+#[test]
+fn worker_rebases_onto_a_moved_target_then_merges() {
+    // Mirrors the real product layout: a registered repo worktree sitting
+    // on `main`, plus a SEPARATE `git worktree add` sibling holding the
+    // feature branch (this is what `mergequeue enqueue` records as
+    // `source_worktree`).
+    //
+    // main:   C1 -> C3 (adds c.txt). feat/x: C1 -> C2 (adds b.txt).
+    // Because main moved past the branch point, this is NOT a
+    // fast-forward; the worker rebases feat/x onto main in the source
+    // worktree, then fast-forwards main in the registered worktree.
+    let repo_dir = TempDir::new().unwrap();
+    let src_parent = TempDir::new().unwrap();
+    let src_dir = src_parent.path().join("feat-x");
+    let state_root = TempDir::new().unwrap();
+
+    sh(repo_dir.path(), &["git", "init", "-q", "-b", "main"]);
+    sh(repo_dir.path(), &["git", "config", "user.email", "t@t"]);
+    sh(repo_dir.path(), &["git", "config", "user.name", "T"]);
+    std::fs::write(repo_dir.path().join("a.txt"), "1").unwrap();
+    sh(repo_dir.path(), &["git", "add", "."]);
+    sh(repo_dir.path(), &["git", "commit", "-q", "-m", "c1"]);
+
+    // feat/x branches off C1 (current main) into a separate worktree and
+    // adds b.txt (C2).
+    sh(
+        repo_dir.path(),
+        &["git", "worktree", "add", "-q", "-b", "feat/x", src_dir.to_str().unwrap(), "main"],
+    );
+    std::fs::write(src_dir.join("b.txt"), "2").unwrap();
+    sh(&src_dir, &["git", "add", "."]);
+    sh(&src_dir, &["git", "commit", "-q", "-m", "c2"]);
+
+    // main advances independently with c.txt (C3) — disjoint file, no conflict.
+    std::fs::write(repo_dir.path().join("c.txt"), "3").unwrap();
+    sh(repo_dir.path(), &["git", "add", "."]);
+    sh(repo_dir.path(), &["git", "commit", "-q", "-m", "c3"]);
+
+    let store_path = state_root.path().join("state.sqlite");
+    let store: Arc<dyn QueueStore> = Arc::new(SqliteStore::open(&store_path).unwrap());
+    let git: Arc<dyn GitOps> = Arc::new(ProcessGit::new());
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock::new());
+    let events = Arc::new(EventBroadcaster::new());
+
+    let repo = RegisteredRepo {
+        id: RepoId::new(),
+        root_path: repo_dir.path().to_path_buf(),
+        default_branch: "main".into(),
+        ci: RepoCiConfig::default(),
+        agent_backend: AgentBackend::Opencode,
+        created_at: OffsetDateTime::now_utc(),
+        updated_at: OffsetDateTime::now_utc(),
+    };
+    store.insert_repo(&repo).unwrap();
+
+    let entry = QueueEntry {
+        id: QueueEntryId::new(),
+        repo_id: repo.id,
+        source_worktree: src_dir.clone(),
+        source_branch: "feat/x".into(),
+        target_branch: "main".into(),
+        status: QueueStatus::Queued,
+        last_outcome: None,
+        enqueued_at: clock.now(),
+        started_at: None,
+        finished_at: None,
+        failure_reason: None,
+        ci_log_dir: None,
+        merge_log_path: None,
+        conflict_session_id: None,
+        message: None,
+        details: None,
+        claimed_by_pid: None,
+        claimed_at: None,
+    };
+    store.enqueue(&entry).unwrap();
+
+    let tmux_ops: Arc<dyn TmuxOps> = Arc::new(ProcessTmux::new());
+    let agents: Arc<dyn AgentRegistry> = Arc::new(DefaultAgentRegistry::new(tmux_ops.clone()));
+    let deps = WorkerDeps {
+        store: store.clone(),
+        git,
+        clock,
+        events,
+        shutdown: ShutdownToken::new(),
+        runs_dir: state_root.path().join("runs"),
+        tmux: tmux_ops,
+        agents,
+        tmux_session_pid: std::process::id(),
+    };
+    let worker = Worker::new(repo.clone(), deps, Duration::from_millis(10));
+
+    let claimed = store
+        .claim_next(repo.id, std::process::id(), OffsetDateTime::now_utc())
+        .unwrap()
+        .expect("worker should claim the queued entry");
+    worker.process(claimed).unwrap();
+
+    let after = store.get_entry(entry.id).unwrap().unwrap();
+    assert_eq!(after.status, QueueStatus::Merged, "{after:?}");
+
+    // main (the registered worktree) must now contain BOTH the rebased
+    // feature file and its own C3.
+    assert!(repo_dir.path().join("b.txt").exists(), "rebased commit landed");
+    assert!(repo_dir.path().join("c.txt").exists(), "target commit preserved");
+
+    // History should be linear (rebase, not a merge commit): c2 rebased on
+    // top of c3 on top of c1.
+    let log = Command::new("git")
+        .args(["log", "--oneline", "--no-decorate"])
+        .current_dir(repo_dir.path())
+        .output()
+        .unwrap();
+    let log = String::from_utf8(log.stdout).unwrap();
+    let subjects: Vec<&str> = log.lines().map(|l| l.splitn(2, ' ').nth(1).unwrap()).collect();
+    assert_eq!(subjects, vec!["c2", "c3", "c1"], "linear rebased history: {log}");
+}
