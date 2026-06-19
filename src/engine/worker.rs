@@ -6,7 +6,10 @@ use std::time::Duration;
 use crate::agents::tmux::TmuxOps;
 use crate::core::events::QueueEvent;
 use crate::core::ports::{AgentRegistry, Clock, GitOps, QueueStore};
-use crate::core::queue::{MergeFailureReason, QueueEntry, QueueStatus, StepOutcome};
+use crate::core::queue::{
+    MergeFailureReason, QueueEntry, QueueEntryDetailStatus, QueueEntryDetails, QueueStatus,
+    StepOutcome,
+};
 use crate::core::repo::RegisteredRepo;
 use crate::core::state_machine::{advance_status, transition, NextAction, TerminalStatus};
 use crate::engine::ci::CiRunner;
@@ -29,7 +32,7 @@ pub struct WorkerDeps {
     pub tmux: Arc<dyn TmuxOps>,
     pub agents: Arc<dyn AgentRegistry>,
     /// Identifier the tmux session is scoped to (typically the
-    /// MergeSmith PID). Lets workers running in the same process share
+    /// MergeQueue PID). Lets workers running in the same process share
     /// one tmux session.
     pub tmux_session_pid: u32,
 }
@@ -77,6 +80,17 @@ impl Worker {
         let pre = run_precheck(&*self.deps.git, &self.repo, &entry)?;
         entry.last_outcome = Some(pre);
         if matches!(pre, StepOutcome::PrecheckDirtyTarget) {
+            set_detail_headline(&mut entry, "Waiting for target worktree to be clean");
+            push_detail(
+                &mut entry,
+                QueueEntryDetailStatus::Blocked,
+                "Target worktree is dirty",
+                Some(format!(
+                    "{} has uncommitted changes; will retry after {:?}",
+                    self.repo.root_path.display(),
+                    self.repo.ci.dirty_retry
+                )),
+            );
             // Hop status back to Queued and bail with a Sleep so the
             // outer loop reclaims after the retry interval.
             entry.status = QueueStatus::Queued;
@@ -140,7 +154,14 @@ impl Worker {
                     return Ok(());
                 }
                 other => {
+                    if matches!(
+                        other,
+                        NextAction::RunLint | NextAction::RunTest | NextAction::RunBuild
+                    ) {
+                        entry.ci_log_dir = Some(self.deps.runs_dir.join(entry.id.to_string()));
+                    }
                     let new_outcome = self.execute(other, &entry)?;
+                    record_step_detail(&mut entry, other, new_outcome);
                     let from = entry.status;
                     entry.status = advance_status(entry.status, other);
                     entry.last_outcome = Some(new_outcome);
@@ -192,6 +213,7 @@ impl Worker {
         entry.finished_at = Some(self.deps.clock.now());
         entry.claimed_by_pid = None;
         entry.claimed_at = None;
+        record_terminal_detail(entry, terminal);
         self.deps.store.update_entry(entry)?;
         self.deps.events.emit(QueueEvent::StatusChanged {
             id: entry.id,
@@ -203,7 +225,7 @@ impl Worker {
 
     fn handoff(&self, entry: &mut QueueEntry) -> Result<()> {
         let from = entry.status;
-        let session = handoff::open_conflict_session(
+        let handoff = handoff::open_conflict_session(
             &*self.deps.store,
             &*self.deps.clock,
             &*self.deps.tmux,
@@ -215,9 +237,38 @@ impl Worker {
         )?;
         entry.status = QueueStatus::NeedsHelp;
         entry.failure_reason = Some(MergeFailureReason::RebaseUnresolvable);
-        entry.conflict_session_id = Some(session.id);
+        entry.conflict_session_id = Some(handoff.session.id);
         entry.claimed_by_pid = None;
         entry.claimed_at = None;
+        set_detail_headline(entry, "Needs help resolving merge conflicts");
+        let conflict_detail = if handoff.conflicted_files.is_empty() {
+            None
+        } else {
+            Some(handoff.conflicted_files.join(", "))
+        };
+        push_detail(
+            entry,
+            QueueEntryDetailStatus::Blocked,
+            "Rebase has conflicts",
+            conflict_detail,
+        );
+        let agent_detail = if handoff.agent_started {
+            Some(format!(
+                "Attach with `t` to tmux {}:{}",
+                handoff.session.tmux_session, handoff.session.tmux_window
+            ))
+        } else {
+            Some(format!(
+                "Agent did not launch automatically: {}",
+                handoff.error.unwrap_or_else(|| "unknown error".to_string())
+            ))
+        };
+        push_detail(
+            entry,
+            QueueEntryDetailStatus::Info,
+            format!("{} handoff", self.repo.agent_backend),
+            agent_detail,
+        );
         self.deps.store.update_entry(entry)?;
         self.deps.events.emit(QueueEvent::StatusChanged {
             id: entry.id,
@@ -226,4 +277,131 @@ impl Worker {
         });
         Ok(())
     }
+}
+
+fn details_mut(entry: &mut QueueEntry) -> &mut QueueEntryDetails {
+    if entry.details.is_none() {
+        let headline = format!(
+            "Merging {} into {}",
+            entry.source_branch, entry.target_branch
+        );
+        entry.details = Some(QueueEntryDetails::new(headline));
+    }
+    entry.details.as_mut().expect("details initialized above")
+}
+
+fn set_detail_headline(entry: &mut QueueEntry, headline: impl Into<String>) {
+    details_mut(entry).headline = Some(headline.into());
+}
+
+fn push_detail(
+    entry: &mut QueueEntry,
+    status: QueueEntryDetailStatus,
+    title: impl Into<String>,
+    detail: Option<String>,
+) {
+    details_mut(entry).push(status, title, detail);
+}
+
+fn record_step_detail(entry: &mut QueueEntry, action: NextAction, outcome: StepOutcome) {
+    match (action, outcome) {
+        (NextAction::Rebase, StepOutcome::RebaseOk) => push_detail(
+            entry,
+            QueueEntryDetailStatus::Success,
+            "Rebase completed",
+            Some(format!(
+                "{} onto {}",
+                entry.source_branch, entry.target_branch
+            )),
+        ),
+        (NextAction::Rebase, StepOutcome::RebaseConflict) => push_detail(
+            entry,
+            QueueEntryDetailStatus::Blocked,
+            "Rebase blocked",
+            Some("Conflicts need an agent or human resolution".to_string()),
+        ),
+        (NextAction::RunLint, StepOutcome::LintPassed) => push_detail(
+            entry,
+            QueueEntryDetailStatus::Success,
+            "Lint passed",
+            log_detail(entry, "lint"),
+        ),
+        (NextAction::RunLint, StepOutcome::LintFailed) => push_detail(
+            entry,
+            QueueEntryDetailStatus::Blocked,
+            "Lint failed",
+            log_detail(entry, "lint"),
+        ),
+        (NextAction::RunTest, StepOutcome::TestPassed) => push_detail(
+            entry,
+            QueueEntryDetailStatus::Success,
+            "Tests passed",
+            log_detail(entry, "test"),
+        ),
+        (NextAction::RunTest, StepOutcome::TestFailed) => push_detail(
+            entry,
+            QueueEntryDetailStatus::Blocked,
+            "Tests failed",
+            log_detail(entry, "test"),
+        ),
+        (NextAction::RunBuild, StepOutcome::BuildPassed) => push_detail(
+            entry,
+            QueueEntryDetailStatus::Success,
+            "Build passed",
+            log_detail(entry, "build"),
+        ),
+        (NextAction::RunBuild, StepOutcome::BuildFailed) => push_detail(
+            entry,
+            QueueEntryDetailStatus::Blocked,
+            "Build failed",
+            log_detail(entry, "build"),
+        ),
+        (NextAction::FastForward, StepOutcome::FastForwardOk) => push_detail(
+            entry,
+            QueueEntryDetailStatus::Success,
+            "Fast-forward completed",
+            Some(format!("{} advanced", entry.target_branch)),
+        ),
+        (NextAction::FastForward, StepOutcome::FastForwardRejected) => push_detail(
+            entry,
+            QueueEntryDetailStatus::Blocked,
+            "Fast-forward rejected",
+            Some("Target moved while this entry was running".to_string()),
+        ),
+        _ => {}
+    }
+}
+
+fn record_terminal_detail(entry: &mut QueueEntry, terminal: TerminalStatus) {
+    match terminal {
+        TerminalStatus::Merged => {
+            set_detail_headline(entry, "Merged successfully");
+            push_detail(
+                entry,
+                QueueEntryDetailStatus::Success,
+                "Entry merged",
+                Some(format!(
+                    "{} -> {}",
+                    entry.source_branch, entry.target_branch
+                )),
+            );
+        }
+        TerminalStatus::Failed(reason) => {
+            set_detail_headline(entry, format!("Blocked: {reason}"));
+        }
+        TerminalStatus::NeedsHelp(reason) => {
+            set_detail_headline(entry, format!("Needs help: {reason}"));
+        }
+        TerminalStatus::Cancelled => {
+            set_detail_headline(entry, "Cancelled");
+            push_detail(entry, QueueEntryDetailStatus::Info, "Entry cancelled", None);
+        }
+    }
+}
+
+fn log_detail(entry: &QueueEntry, step: &str) -> Option<String> {
+    entry
+        .ci_log_dir
+        .as_ref()
+        .map(|dir| format!("log: {}", dir.join(format!("ci-{step}.log")).display()))
 }

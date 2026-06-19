@@ -4,9 +4,9 @@ use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "mergesmith",
+    name = "mergequeue",
     version,
-    about = "Local merge queue with a pixel-art blacksmith",
+    about = "Local merge queue with an animated Penrose-tiling visualizer",
     long_about = None,
 )]
 pub struct Cli {
@@ -18,8 +18,8 @@ pub struct Cli {
 pub enum Command {
     /// Open the animated TUI (also the default when no subcommand
     /// is given).
-    Tui,
-    /// Register the current repo with MergeSmith.
+    Tui(TuiArgs),
+    /// Register the current repo with MergeQueue.
     Init(InitArgs),
     /// Queue the current worktree for merge.
     Enqueue(EnqueueArgs),
@@ -56,6 +56,13 @@ pub struct InitArgs {
     /// Optional build command.
     #[arg(long)]
     pub build: Option<String>,
+}
+
+#[derive(Debug, Default, Parser)]
+pub struct TuiArgs {
+    /// Run the TUI with in-memory showcase data and no workers.
+    #[arg(long)]
+    pub demo: bool,
 }
 
 #[derive(Debug, Parser)]

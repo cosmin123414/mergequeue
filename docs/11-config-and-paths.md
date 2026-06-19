@@ -3,17 +3,17 @@
 ## State root resolution
 
 ```
-1. $MERGESMITH_HOME (if set)
-2. macOS:  $HOME/Library/Application Support/MergeSmith
-   Linux:  $XDG_DATA_HOME/mergesmith
-              (fallback $HOME/.local/share/mergesmith)
+1. $MERGEQUEUE_HOME (if set)
+2. macOS:  $HOME/Library/Application Support/MergeQueue
+   Linux:  $XDG_DATA_HOME/mergequeue
+              (fallback $HOME/.local/share/mergequeue)
 3. error
 ```
 
 ## Layout
 
 ```
-$MERGESMITH_HOME/
+$MERGEQUEUE_HOME/
   state.sqlite[-wal][-shm]
   tui.pid
   config.toml
@@ -34,7 +34,7 @@ dirty_target_retry_secs   = 30
 soft_shutdown_timeout_secs = 60
 
 [agent]
-default = "opencode"     # opencode | claude_code | cursor | codex
+default = "opencode"     # opencode (the only shipped backend)
 
 [tui]
 sprite_fps              = 12
@@ -44,12 +44,12 @@ celebrate_on_merge      = true
 
 ## Per-repo config
 
-Lives in `registered_repos` row. Edit via `mergesmith repos edit <id|name>`,
+Lives in `registered_repos` row. Edit via `mergequeue repos edit <id|name>`,
 which round-trips through `$EDITOR` on a TOML stub:
 
 ```toml
-# Editing repo: mergesmith (a82e1c…)
-root_path       = "/Users/cosmin/Projects/mergesmith"
+# Editing repo: mergequeue (a82e1c…)
+root_path       = "/Users/cosmin/Projects/mergequeue"
 default_branch  = "main"
 lint_command    = "cargo fmt --check && cargo clippy -- -D warnings"
 test_command    = "cargo test"

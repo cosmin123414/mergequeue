@@ -17,7 +17,7 @@ pub mod worker;
 #[cfg(test)]
 mod tests;
 
-pub use events::{EventBroadcaster, EventSubscriber};
+pub use events::EventBroadcaster;
 pub use pool::{EnginePool, PoolDeps, Reconciliation};
 pub use shutdown::{ShutdownLevel, ShutdownToken};
 pub use worker::{Worker, WorkerDeps};

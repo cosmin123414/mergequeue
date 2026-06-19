@@ -3,9 +3,9 @@
 //!
 //! Why this shape:
 //!
-//! - MergeSmith has no daemon. The pool only runs inside `mergesmith
+//! - MergeQueue has no daemon. The pool only runs inside `mergequeue
 //!   tui` (M4) and inside engine tests.
-//! - The user can `mergesmith init` / `mergesmith repos remove` from
+//! - The user can `mergequeue init` / `mergequeue repos remove` from
 //!   another terminal while the TUI is up. The TUI's render loop calls
 //!   `pool.reconcile()` periodically so the worker set tracks the store.
 //! - We give each worker its own `ShutdownToken` so removing one repo
@@ -182,7 +182,7 @@ fn spawn_worker(
     let repo_short = worker.repo.id.short();
 
     let join = std::thread::Builder::new()
-        .name(format!("mergesmith-worker-{repo_short}"))
+        .name(format!("mergequeue-worker-{repo_short}"))
         .spawn(move || {
             if let Err(e) = worker.run() {
                 tracing::error!("worker for repo {} exited with error: {e}", worker.repo.id);

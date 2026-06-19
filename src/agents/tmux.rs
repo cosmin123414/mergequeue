@@ -1,4 +1,4 @@
-//! `TmuxOps`: a minimal abstraction over the bits of `tmux(1)` MergeSmith
+//! `TmuxOps`: a minimal abstraction over the bits of `tmux(1)` MergeQueue
 //! needs to manage detached agent sessions.
 //!
 //! This is intentionally **not** one of the four core seam traits — only
@@ -26,17 +26,12 @@ pub trait TmuxOps: Send + Sync {
 
     /// Open a new named window inside `session`, with `cwd` as its working
     /// directory. Does NOT spawn a program — the window opens a default
-    /// shell. Returns a `TmuxHandle` you can later target with `send_keys`
-    /// or `kill_window`.
+    /// shell. Returns a `TmuxHandle` you can later target with `send_keys`.
     fn new_window(&self, session: &str, window: &str, cwd: &Path) -> Result<TmuxHandle>;
 
     /// `tmux send-keys -t <session>:<window> <keys> [Enter]`. If `enter`
     /// is `true` we append `Enter` so the line is submitted.
     fn send_keys(&self, handle: &TmuxHandle, keys: &str, enter: bool) -> Result<()>;
-
-    /// `tmux kill-window -t <session>:<window>`. Returns Ok even if the
-    /// window doesn't exist (idempotent cleanup).
-    fn kill_window(&self, handle: &TmuxHandle) -> Result<()>;
 
     /// `true` iff the window referenced by `handle` is still alive on the
     /// tmux server. Used by the recovery sweep to detect abandoned
@@ -80,7 +75,7 @@ impl TmuxOps for ProcessTmux {
             // First window stays as a holding shell. We never use it; all
             // real work happens in named per-conflict windows.
             "-n",
-            "mergesmith",
+            "mergequeue",
         ]);
         let out = c.output().map_err(|e| Error::tmux(format!("spawn: {e}")))?;
         if !out.status.success() {
@@ -145,15 +140,6 @@ impl TmuxOps for ProcessTmux {
         Ok(())
     }
 
-    fn kill_window(&self, handle: &TmuxHandle) -> Result<()> {
-        let target = format!("{}:{}", handle.session, handle.window);
-        let mut c = Self::tmux();
-        c.args(["kill-window", "-t", &target]);
-        // Ignore non-zero exit: window may already be gone.
-        let _ = c.output().map_err(|e| Error::tmux(format!("spawn: {e}")))?;
-        Ok(())
-    }
-
     fn window_alive(&self, handle: &TmuxHandle) -> Result<bool> {
         if !self.has_session(&handle.session)? {
             return Ok(false);
@@ -175,11 +161,11 @@ impl TmuxOps for ProcessTmux {
 // Naming helpers (shared with the engine).
 // ---------------------------------------------------------------------
 
-/// Per-MergeSmith-process session name. We scope by PID so that two
-/// MergeSmith instances on the same host (even though only one holds the
+/// Per-MergeQueue-process session name. We scope by PID so that two
+/// MergeQueue instances on the same host (even though only one holds the
 /// TUI lock) don't share tmux state.
 pub fn session_name(pid: u32) -> String {
-    format!("mergesmith-{pid}")
+    format!("mergequeue-{pid}")
 }
 
 /// Per-queue-entry window name. Stable for the lifetime of a
@@ -194,7 +180,7 @@ mod tests {
 
     #[test]
     fn session_name_includes_pid() {
-        assert_eq!(session_name(4242), "mergesmith-4242");
+        assert_eq!(session_name(4242), "mergequeue-4242");
     }
 
     #[test]

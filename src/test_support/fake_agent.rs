@@ -49,17 +49,6 @@ impl FakeAgent {
 }
 
 impl MergeAgent for FakeAgent {
-    fn backend(&self) -> AgentBackend {
-        self.backend
-    }
-
-    fn check_available(&self) -> Result<()> {
-        if self.fail {
-            return Err(Error::agent("fake unavailable"));
-        }
-        Ok(())
-    }
-
     fn open_conflict_session(
         &self,
         worktree: &Path,

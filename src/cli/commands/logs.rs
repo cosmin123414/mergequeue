@@ -1,4 +1,4 @@
-//! `mergesmith logs <id>` — print CI + merge logs for an entry.
+//! `mergequeue logs <id>` — print CI + merge logs for an entry.
 
 use std::process::ExitCode;
 

@@ -1,4 +1,4 @@
-//! `mergesmith cancel <id>` — mark an entry Cancelled.
+//! `mergequeue cancel <id>` — mark an entry Cancelled.
 
 use std::process::ExitCode;
 use std::str::FromStr;

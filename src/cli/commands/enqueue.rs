@@ -1,4 +1,4 @@
-//! `mergesmith enqueue` — queue the current worktree for merge.
+//! `mergequeue enqueue` — queue the current worktree for merge.
 
 use std::process::ExitCode;
 
@@ -21,7 +21,7 @@ pub fn run(args: EnqueueArgs) -> Result<ExitCode> {
     let repos = ctx.store.list_repos()?;
     let Some(repo) = pick_repo_for_worktree(&repos, &worktree_root) else {
         eprintln!(
-            "no registered repo for {}.\nrun `mergesmith init` inside the repo first.",
+            "no registered repo for {}.\nrun `mergequeue init` inside the repo first.",
             worktree_root.display()
         );
         return Ok(ExitCode::from(3));
@@ -55,6 +55,7 @@ pub fn run(args: EnqueueArgs) -> Result<ExitCode> {
         merge_log_path: None,
         conflict_session_id: None,
         message: args.message,
+        details: None,
         claimed_by_pid: None,
         claimed_at: None,
     };

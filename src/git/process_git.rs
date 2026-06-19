@@ -7,26 +7,15 @@ use crate::core::ports::{FastForwardOutcome, GitOps, RebaseOutcome};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Default, Clone)]
-pub struct ProcessGit {
-    /// Path to `git`. If `None`, we let `PATH` resolution happen.
-    git_path: Option<PathBuf>,
-}
+pub struct ProcessGit;
 
 impl ProcessGit {
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_git_path(mut self, p: PathBuf) -> Self {
-        self.git_path = Some(p);
-        self
+        Self
     }
 
     fn cmd(&self, workdir: &Path) -> Command {
-        let mut c = match &self.git_path {
-            Some(p) => Command::new(p),
-            None => Command::new("git"),
-        };
+        let mut c = Command::new("git");
         c.current_dir(workdir);
         // Make output deterministic and locale-independent.
         c.env("LC_ALL", "C");

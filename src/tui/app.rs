@@ -9,26 +9,27 @@
 //! - The shutdown intention (`q` → soft, `Q` → hard, exit immediately
 //!   without user prompt).
 
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use ratatui::widgets::TableState;
 
+use crate::core::ids::{QueueEntryId, RepoId};
 use crate::core::queue::{QueueEntry, QueueStatus};
+use crate::core::repo::RegisteredRepo;
 use crate::tui::sprite::state::{compute_sprite_state, QueueSnapshot, SpriteState};
-
-/// What the TUI plans to do next render-loop iteration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppDecision {
-    Continue,
-    QuitSoft,
-    QuitHard,
-}
+use crate::tui::sprite::{DotBitmap, PenroseAnimator};
 
 pub struct AppState {
     /// Latest list of entries from the store, sorted by `enqueued_at`
     /// then `repo_id`. Capped at `MAX_ENTRIES_VISIBLE` for the table.
     pub entries: Vec<QueueEntry>,
+    /// Display label for each registered repo, derived from its root path
+    /// leaf. Bucket rows use this to show `repo:branch` instead of noisy
+    /// absolute paths.
+    pub repo_labels: HashMap<RepoId, String>,
     pub table: TableState,
+    pub expanded_entry_ids: HashSet<QueueEntryId>,
     pub sprite_tick: u64,
     /// Computed sprite state for the current snapshot. Cached so we
     /// only recompute when entries change.
@@ -39,6 +40,15 @@ pub struct AppState {
     pub started_at: Instant,
     /// Set when a `?` overlay is being shown.
     pub help_visible: bool,
+    /// Tiling animator. Owned here so the glyph path can advance + sample
+    /// it inside the ratatui draw closure.
+    pub animator: PenroseAnimator,
+    /// Seconds elapsed since the previous frame; fed to the animator when
+    /// drawing glyphs. Set by `run.rs` each iteration.
+    pub frame_dt: f32,
+    /// Previous glyph dot field, used only by text-mode rendering to decay
+    /// disappearing dots over a few frames instead of letting them sparkle.
+    pub glyph_prev_bitmap: Option<DotBitmap>,
 }
 
 pub const MAX_ENTRIES_VISIBLE: usize = 200;
@@ -50,15 +60,22 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// Construct the TUI state. The centerpiece animation is rendered as
+    /// Braille text glyphs, which works in any terminal.
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            repo_labels: HashMap::new(),
             table: TableState::default(),
+            expanded_entry_ids: HashSet::new(),
             sprite_tick: 0,
             sprite_state: SpriteState::Idle,
             status_line: "ready".into(),
             started_at: Instant::now(),
             help_visible: false,
+            animator: PenroseAnimator::new(),
+            frame_dt: 0.0,
+            glyph_prev_bitmap: None,
         }
     }
 
@@ -91,7 +108,25 @@ impl AppState {
         } else {
             self.table.select(Some(0));
         }
+        let visible_ids: HashSet<QueueEntryId> = entries.iter().map(|entry| entry.id).collect();
+        self.expanded_entry_ids
+            .retain(|id| visible_ids.contains(id));
         self.entries = entries;
+    }
+
+    pub fn ingest_repos(&mut self, repos: &[RegisteredRepo]) {
+        self.repo_labels = repos
+            .iter()
+            .map(|repo| {
+                let label =
+                    if let Some(name) = repo.root_path.file_name().and_then(|name| name.to_str()) {
+                        name.to_string()
+                    } else {
+                        repo.root_path.to_string_lossy().to_string()
+                    };
+                (repo.id, label)
+            })
+            .collect();
     }
 
     pub fn advance_sprite(&mut self) {
@@ -127,11 +162,29 @@ impl AppState {
     }
 
     /// Whether the selected entry is in a state that the TUI can act
-    /// on. Per `docs/08-tui-and-sprite.md` the only TUI mutation is
-    /// "delete a Queued entry."
+    /// on for delete.
     pub fn selected_is_deletable(&self) -> bool {
         self.selected()
             .is_some_and(|e| e.status == QueueStatus::Queued)
+    }
+
+    pub fn selected_needs_help(&self) -> bool {
+        self.selected()
+            .is_some_and(|e| e.status == QueueStatus::NeedsHelp)
+    }
+
+    pub fn toggle_selected_expanded(&mut self) {
+        let Some(id) = self.selected().map(|entry| entry.id) else {
+            return;
+        };
+        if !self.expanded_entry_ids.insert(id) {
+            self.expanded_entry_ids.remove(&id);
+        }
+    }
+
+    pub fn selected_is_expanded(&self) -> bool {
+        self.selected()
+            .is_some_and(|entry| self.expanded_entry_ids.contains(&entry.id))
     }
 
     pub fn toggle_help(&mut self) {
@@ -166,6 +219,7 @@ mod tests {
             merge_log_path: None,
             conflict_session_id: None,
             message: None,
+            details: None,
             claimed_by_pid: None,
             claimed_at: None,
         }
@@ -275,5 +329,29 @@ mod tests {
         let before = app.sprite_tick;
         app.advance_sprite();
         assert_eq!(app.sprite_tick, before + 1);
+    }
+
+    #[test]
+    fn toggle_selected_expanded_tracks_selected_entry() {
+        let mut app = AppState::new();
+        app.ingest_entries(vec![entry(QueueStatus::Queued, "a", 1)]);
+        app.toggle_selected_expanded();
+        assert!(app.selected_is_expanded());
+        app.toggle_selected_expanded();
+        assert!(!app.selected_is_expanded());
+    }
+
+    #[test]
+    fn ingest_drops_expanded_ids_for_entries_no_longer_visible() {
+        let mut app = AppState::new();
+        let a = entry(QueueStatus::Queued, "a", 1);
+        let b = entry(QueueStatus::Queued, "b", 2);
+        let a_id = a.id;
+        let b_id = b.id;
+        app.ingest_entries(vec![a, b]);
+        app.expanded_entry_ids.insert(a_id);
+        app.expanded_entry_ids.insert(b_id);
+        app.ingest_entries(vec![entry(QueueStatus::Queued, "c", 3)]);
+        assert!(app.expanded_entry_ids.is_empty());
     }
 }

@@ -40,8 +40,8 @@ fn make_git_repo(dir: &std::path::Path, branch: &str) {
 }
 
 fn ms(state_root: &std::path::Path) -> Command {
-    let mut c = Command::cargo_bin("mergesmith").unwrap();
-    c.env("MERGESMITH_HOME", state_root);
+    let mut c = Command::cargo_bin("mergequeue").unwrap();
+    c.env("MERGEQUEUE_HOME", state_root);
     c
 }
 

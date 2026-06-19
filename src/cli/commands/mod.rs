@@ -13,13 +13,14 @@ mod tui;
 
 use std::process::ExitCode;
 
-use crate::cli::parser::{Cli, Command};
+use crate::cli::parser::{Cli, Command, TuiArgs};
 use crate::error::Result;
 
 pub fn dispatch(cli: Cli) -> Result<ExitCode> {
     match cli.command {
-        // Bare `mergesmith` aliases `mergesmith tui` (per `docs/07-cli.md`).
-        None | Some(Command::Tui) => tui::run(),
+        // Bare `mergequeue` aliases `mergequeue tui` (per `docs/07-cli.md`).
+        None => tui::run(TuiArgs::default()),
+        Some(Command::Tui(a)) => tui::run(a),
         Some(Command::Init(a)) => init::run(a),
         Some(Command::Enqueue(a)) => enqueue::run(a),
         Some(Command::Status(a)) => status::run(a),

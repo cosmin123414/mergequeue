@@ -42,12 +42,6 @@ impl Default for RepoCiConfig {
     }
 }
 
-impl RepoCiConfig {
-    pub fn has_any_ci(&self) -> bool {
-        self.lint_command.is_some() || self.test_command.is_some() || self.build_command.is_some()
-    }
-}
-
 mod duration_ms {
     use std::time::Duration;
 

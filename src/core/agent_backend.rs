@@ -7,25 +7,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 
+/// The coding-agent backend used to resolve conflicts. MergeQueue
+/// currently ships a single backend (opencode); the enum is kept so the
+/// per-repo `agent_backend` column and the `MergeAgent` seam stay stable
+/// if more backends are added later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AgentBackend {
     Opencode,
-    ClaudeCode,
-    Cursor,
-    Codex,
 }
 
 impl AgentBackend {
-    pub fn all() -> [Self; 4] {
-        [Self::Opencode, Self::ClaudeCode, Self::Cursor, Self::Codex]
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Opencode => "opencode",
-            Self::ClaudeCode => "claude_code",
-            Self::Cursor => "cursor",
-            Self::Codex => "codex",
         }
     }
 }
@@ -41,9 +35,6 @@ impl FromStr for AgentBackend {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "opencode" => Ok(Self::Opencode),
-            "claude_code" | "claude-code" | "claude" => Ok(Self::ClaudeCode),
-            "cursor" | "cursor-agent" => Ok(Self::Cursor),
-            "codex" => Ok(Self::Codex),
             other => Err(Error::invalid(format!("unknown agent backend: {other}"))),
         }
     }
@@ -54,12 +45,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_all_known_backends() {
-        for b in AgentBackend::all() {
-            let s = b.to_string();
-            let parsed: AgentBackend = s.parse().unwrap();
-            assert_eq!(b, parsed);
-        }
+    fn round_trip_opencode() {
+        let b = AgentBackend::Opencode;
+        let parsed: AgentBackend = b.to_string().parse().unwrap();
+        assert_eq!(b, parsed);
     }
 
     #[test]

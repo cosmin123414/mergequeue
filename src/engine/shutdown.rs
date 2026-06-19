@@ -69,10 +69,6 @@ impl ShutdownToken {
         self.level() != ShutdownLevel::Running
     }
 
-    pub fn is_hard(&self) -> bool {
-        self.level() == ShutdownLevel::Hard
-    }
-
     /// Set this token's own source to `Soft`. No-op if it has already
     /// escalated to `Hard`.
     pub fn set_soft(&self) {
@@ -115,7 +111,7 @@ mod tests {
 
         // Hard on the parent shows through the child.
         parent.set_hard();
-        assert!(child.is_hard());
+        assert_eq!(child.level(), ShutdownLevel::Hard);
     }
 
     #[test]
@@ -134,6 +130,6 @@ mod tests {
         let b = ShutdownToken::new();
         let c = ShutdownToken::merged([a.clone(), b.clone()]);
         b.set_hard();
-        assert!(c.is_hard());
+        assert_eq!(c.level(), ShutdownLevel::Hard);
     }
 }

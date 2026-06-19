@@ -1,5 +1,5 @@
-//! Animated TUI with a pixel-art blacksmith rendered via the Kitty
-//! graphics protocol.
+//! Animated TUI with a Penrose-tiling visualizer rendered as Braille
+//! text glyphs (works in any terminal).
 //!
 //! Module shape:
 //!
@@ -9,22 +9,18 @@
 //!   app.rs           AppState: queue snapshot + sprite ticker + selection
 //!   ui.rs            ratatui draw fn (layout + widgets)
 //!   events.rs        crossterm event poll + key mapping
-//!   capability.rs    Kitty-graphics probe with timeout + terminal-mode guard
 //!   sprite/
-//!     mod.rs         SpriteRenderer: lifecycle (upload / place / delete)
+//!     mod.rs         re-exports for the animator + state derivation
 //!     state.rs       SpriteState + compute_sprite_state()
-//!     kitty.rs       pure protocol-bytes functions
-//!     placeholder.rs procedurally-generated 64x64 sprite (M4 only;
-//!                    M5 swaps in commissioned art).
+//!     penrose.rs     PenroseAnimator: rasterizes the tiling per frame.
+//!     glyph.rs       Braille text rendering of a rasterized frame.
 //! ```
 //!
-//! The TUI is intentionally read-only with respect to the queue. The
-//! only mutation it supports is "delete a Queued entry" (`d` key). All
-//! other operations — enqueue, cancel-in-flight, retry, resolve — are
-//! CLI subcommands, per `docs/07-cli.md`.
+//! The TUI is the primary queue surface. It can delete a queued entry
+//! (`d`) and attach directly to a selected `NeedsHelp` agent session
+//! (`Enter` / `r`); enqueue/retry remain CLI commands for now.
 
 pub mod app;
-pub mod capability;
 pub mod events;
 pub mod sprite;
 pub mod ui;

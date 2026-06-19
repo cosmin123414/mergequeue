@@ -120,12 +120,12 @@ UPDATE queue_entries
 startup, the engine separately probes any open `conflict_sessions` whose
 queue entry is `NeedsHelp`: if the tmux session is gone, mark the conflict
 session `Abandoned` (the queue entry stays `NeedsHelp` for the user to
-`mergesmith resolve` again).
+`mergequeue resolve` again).
 
 ## PID-file singleton lock for the TUI
 
-`$MERGESMITH_HOME/tui.pid` is created with an exclusive `fs2` flock at
-`mergesmith tui` startup. If the file exists and the PID is alive, refuse
+`$MERGEQUEUE_HOME/tui.pid` is created with an exclusive `fs2` flock at
+`mergequeue tui` startup. If the file exists and the PID is alive, refuse
 the second TUI with a friendly error. If the file exists but the PID is
 dead, the lock acquisition will succeed (stale-file handling is automatic
 because we use flock, not file existence).

@@ -1,4 +1,4 @@
-//! MergeSmith — a local merge queue with a pixel-art blacksmith.
+//! MergeQueue — a local merge queue with an animated Penrose-tiling visualizer.
 //!
 //! See `docs/` at the repository root for the architectural plan.
 //!

@@ -18,7 +18,9 @@ use crate::core::agent_backend::AgentBackend;
 use crate::core::conflict::{ConflictOutcome, ConflictSession};
 use crate::core::ids::{ConflictSessionId, QueueEntryId, RepoId};
 use crate::core::ports::{EntryFilter, QueueStore};
-use crate::core::queue::{MergeFailureReason, QueueEntry, QueueStatus, StepOutcome};
+use crate::core::queue::{
+    MergeFailureReason, QueueEntry, QueueEntryDetails, QueueStatus, StepOutcome,
+};
 use crate::core::repo::{RegisteredRepo, RepoCiConfig};
 use crate::error::{Error, Result};
 use crate::store::{connection, migrations};
@@ -124,6 +126,15 @@ fn parse_failure_reason(s: &str) -> Result<MergeFailureReason> {
     }
 }
 
+fn parse_details(s: &str) -> Result<QueueEntryDetails> {
+    serde_json::from_str(s).map_err(|e| Error::other(format!("invalid queue details JSON: {e}")))
+}
+
+fn details_to_json(details: &QueueEntryDetails) -> Result<String> {
+    serde_json::to_string(details)
+        .map_err(|e| Error::other(format!("serialize queue details JSON: {e}")))
+}
+
 fn parse_conflict_outcome(s: &str) -> Result<ConflictOutcome> {
     match s {
         "Resolved" => Ok(ConflictOutcome::Resolved),
@@ -200,6 +211,7 @@ fn entry_from_row(row: &Row<'_>) -> rusqlite::Result<QueueEntry> {
     let merge_log_path: Option<String> = row.get("merge_log_path")?;
     let conflict_session_id_str: Option<String> = row.get("conflict_session_id")?;
     let message: Option<String> = row.get("message")?;
+    let details: Option<String> = row.get("details")?;
     let claimed_by_pid: Option<i64> = row.get("claimed_by_pid")?;
     let claimed_at: Option<i64> = row.get("claimed_at")?;
 
@@ -238,6 +250,10 @@ fn entry_from_row(row: &Row<'_>) -> rusqlite::Result<QueueEntry> {
                 )
             })?,
         message,
+        details: details
+            .map(|s| parse_details(&s))
+            .transpose()
+            .map_err(conv)?,
         claimed_by_pid: claimed_by_pid.map(|v| u32::try_from(v).unwrap_or(0)),
         claimed_at: opt_ts_to_dt(claimed_at).map_err(conv)?,
     })
@@ -387,9 +403,9 @@ impl QueueStore for SqliteStore {
                     id, repo_id, source_worktree, source_branch, target_branch,
                     status, last_outcome, enqueued_at, started_at, finished_at,
                     failure_reason, ci_log_dir, merge_log_path,
-                    conflict_session_id, message, claimed_by_pid, claimed_at
+                    conflict_session_id, message, details, claimed_by_pid, claimed_at
                  ) VALUES (
-                    ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17
+                    ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18
                  )",
                 params![
                     entry.id.to_string(),
@@ -413,6 +429,7 @@ impl QueueStore for SqliteStore {
                         .map(|p| p.to_string_lossy().to_string()),
                     entry.conflict_session_id.map(|c| c.to_string()),
                     entry.message,
+                    entry.details.as_ref().map(details_to_json).transpose()?,
                     entry.claimed_by_pid.map(i64::from),
                     opt_dt_to_ts(entry.claimed_at),
                 ],
@@ -523,9 +540,10 @@ impl QueueStore for SqliteStore {
                        merge_log_path      = ?8,
                        conflict_session_id = ?9,
                        message             = ?10,
-                       claimed_by_pid      = ?11,
-                       claimed_at          = ?12
-                 WHERE id = ?1",
+                       details             = ?11,
+                       claimed_by_pid      = ?12,
+                       claimed_at          = ?13
+                  WHERE id = ?1",
                 params![
                     entry.id.to_string(),
                     entry.status.as_str(),
@@ -543,6 +561,7 @@ impl QueueStore for SqliteStore {
                         .map(|p| p.to_string_lossy().to_string()),
                     entry.conflict_session_id.map(|c| c.to_string()),
                     entry.message,
+                    entry.details.as_ref().map(details_to_json).transpose()?,
                     entry.claimed_by_pid.map(i64::from),
                     opt_dt_to_ts(entry.claimed_at),
                 ],
@@ -679,6 +698,7 @@ impl QueueStore for SqliteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::queue::QueueEntryDetailStatus;
     use std::path::PathBuf;
     use time::OffsetDateTime;
 
@@ -717,6 +737,7 @@ mod tests {
             merge_log_path: None,
             conflict_session_id: None,
             message: None,
+            details: None,
             claimed_by_pid: None,
             claimed_at: None,
         }
@@ -742,6 +763,25 @@ mod tests {
         let fetched = s.get_entry(e.id).unwrap().unwrap();
         assert_eq!(fetched.id, e.id);
         assert_eq!(fetched.source_branch, "feat/x");
+    }
+
+    #[test]
+    fn queue_details_round_trip() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        let r = sample_repo();
+        s.insert_repo(&r).unwrap();
+        let mut e = sample_entry(r.id);
+        let mut details = QueueEntryDetails::new("Waiting on tests");
+        details.push(
+            QueueEntryDetailStatus::Blocked,
+            "Tests failed",
+            Some("log: /tmp/run/ci-test.log".to_string()),
+        );
+        e.details = Some(details.clone());
+        s.enqueue(&e).unwrap();
+
+        let fetched = s.get_entry(e.id).unwrap().unwrap();
+        assert_eq!(fetched.details, Some(details));
     }
 
     #[test]
@@ -865,7 +905,7 @@ mod tests {
             id: ConflictSessionId::new(),
             queue_entry_id: e.id,
             agent_backend: AgentBackend::Opencode,
-            tmux_session: "mergesmith-test".into(),
+            tmux_session: "mergequeue-test".into(),
             tmux_window: "test-window".into(),
             started_at: now(),
             ended_at: None,
@@ -873,7 +913,7 @@ mod tests {
         };
         s.open_conflict_session(&cs).unwrap();
         let back = s.get_conflict_session(cs.id).unwrap().unwrap();
-        assert_eq!(back.tmux_session, "mergesmith-test");
+        assert_eq!(back.tmux_session, "mergequeue-test");
         assert!(back.outcome.is_none());
 
         s.close_conflict_session(cs.id, ConflictOutcome::Resolved, now())

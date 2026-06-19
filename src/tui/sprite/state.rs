@@ -10,11 +10,11 @@
 //!   intervention.
 //!
 //! Priority `NeedsHelp > Working > Idle`. This is the user-attention
-//! ordering: if anything needs them, that's what the smith should be
-//! signalling, even if other entries are humming along.
+//! ordering: if anything needs the user, that's what the animation
+//! should be signalling, even if other entries are humming along.
 //!
-//! M5 will add `CI`, `Celebrate`, and `Failed`; this module's API is
-//! shaped to make that addition non-breaking.
+//! The chosen state tunes the Penrose animation (zoom speed + accent
+//! color) rather than selecting a sprite-sheet frame.
 
 use crate::core::queue::{QueueEntry, QueueStatus};
 
@@ -60,56 +60,16 @@ impl QueueSnapshot {
     }
 }
 
-/// Which sprite the renderer should draw this tick.
+/// Which mood the Penrose animation should render this tick.
 ///
-/// Each variant carries its own frame count + frames-per-second so
-/// `frame_for_tick` is self-contained.
+/// The variant tunes the animator's zoom speed and accent color (see
+/// [`crate::tui::sprite::penrose::PenroseAnimator::frame`]); the tiling
+/// geometry is identical across states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpriteState {
     Idle,
     Working,
     NeedsHelp,
-}
-
-impl SpriteState {
-    /// Number of frames in this state's animation loop. With the
-    /// new stippled-illustration aesthetic every state is 3 frames;
-    /// per-state expressiveness comes from spark patterns and pulse
-    /// rates, not from sprite shape.
-    ///
-    /// `&self` is intentional: M5's hand-drawn sheet may use
-    /// different frame counts per state.
-    #[allow(clippy::unused_self)]
-    pub fn frame_count(self) -> u32 {
-        3
-    }
-
-    /// Speed of the animation, in ticks per frame advance. Lower =
-    /// faster. The render loop's tick is the sprite-FPS clock
-    /// (default 12 Hz).
-    ///
-    /// We slow each state down considerably compared to the
-    /// rectangle-cartoon era: stippled forge embers and pulses look
-    /// best at ~3 fps. Faster than that and the eye sees flicker
-    /// rather than motion.
-    pub fn ticks_per_frame(self) -> u64 {
-        match self {
-            // 3 fps — slow ember flicker.
-            Self::Idle => 4,
-            // 6 fps — busier sparks.
-            Self::Working => 2,
-            // 2 fps — slow pulse of the question mark.
-            Self::NeedsHelp => 6,
-        }
-    }
-
-    /// Pick the animation frame index (0..frame_count) for the given
-    /// global tick counter.
-    pub fn frame_for_tick(self, tick: u64) -> u32 {
-        let n = u64::from(self.frame_count());
-        let tpf = self.ticks_per_frame();
-        u32::try_from((tick / tpf) % n).unwrap_or(0)
-    }
 }
 
 /// Pick the sprite state from a queue snapshot. Pure function.
@@ -147,6 +107,7 @@ mod tests {
             merge_log_path: None,
             conflict_session_id: None,
             message: None,
+            details: None,
             claimed_by_pid: None,
             claimed_at: None,
         }
@@ -160,8 +121,8 @@ mod tests {
 
     #[test]
     fn only_queued_is_idle() {
-        // Queued entries don't make the smith work; he's idle until
-        // someone is actually claimed and processing.
+        // Queued entries don't count as work-in-flight; the animation
+        // stays Idle until something is actually claimed and processing.
         let snap = QueueSnapshot::from_entries(&[entry(QueueStatus::Queued)]);
         assert_eq!(compute_sprite_state(&snap), SpriteState::Idle);
     }
@@ -201,41 +162,6 @@ mod tests {
             entry(QueueStatus::Cancelled),
         ]);
         assert_eq!(compute_sprite_state(&snap), SpriteState::Idle);
-    }
-
-    #[test]
-    fn frame_indices_cycle_through_three_frames() {
-        // Idle: 3 frames, ticks_per_frame = 4. Over ticks 0..24:
-        //   0,0,0,0,1,1,1,1,2,2,2,2,0,0,0,0,1,1,1,1,2,2,2,2
-        let s = SpriteState::Idle;
-        let want: Vec<u32> = (0u64..24)
-            .map(|t| u32::try_from((t / 4) % 3).unwrap())
-            .collect();
-        let got: Vec<u32> = (0u64..24).map(|t| s.frame_for_tick(t)).collect();
-        assert_eq!(got, want);
-    }
-
-    #[test]
-    fn working_advances_every_two_ticks() {
-        // 3 frames, tpf = 2.
-        let s = SpriteState::Working;
-        for t in 0..12u64 {
-            assert_eq!(s.frame_for_tick(t), u32::try_from((t / 2) % 3).unwrap());
-        }
-    }
-
-    #[test]
-    fn needs_help_pulses_slowly() {
-        // 3 frames, tpf = 6 — one full cycle every 18 ticks (≈ 1.5s
-        // at 12 Hz), so the pulse reads as a deliberate breath rather
-        // than a flicker.
-        let s = SpriteState::NeedsHelp;
-        assert_eq!(s.frame_for_tick(0), 0);
-        assert_eq!(s.frame_for_tick(5), 0);
-        assert_eq!(s.frame_for_tick(6), 1);
-        assert_eq!(s.frame_for_tick(12), 2);
-        assert_eq!(s.frame_for_tick(17), 2);
-        assert_eq!(s.frame_for_tick(18), 0);
     }
 
     #[test]

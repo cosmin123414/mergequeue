@@ -4,14 +4,14 @@ use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 
-/// Resolve the MergeSmith state-root directory.
+/// Resolve the MergeQueue state-root directory.
 ///
 /// Order:
-/// 1. `$MERGESMITH_HOME` if set.
-/// 2. macOS: `$HOME/Library/Application Support/MergeSmith`.
-/// 3. Linux: `$XDG_DATA_HOME/mergesmith` (fallback `$HOME/.local/share/mergesmith`).
+/// 1. `$MERGEQUEUE_HOME` if set.
+/// 2. macOS: `$HOME/Library/Application Support/MergeQueue`.
+/// 3. Linux: `$XDG_DATA_HOME/mergequeue` (fallback `$HOME/.local/share/mergequeue`).
 pub fn state_root() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("MERGESMITH_HOME") {
+    if let Ok(p) = std::env::var("MERGEQUEUE_HOME") {
         if !p.is_empty() {
             return Ok(PathBuf::from(p));
         }
@@ -25,17 +25,17 @@ pub fn state_root() -> Result<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
-        Ok(home.join("Library/Application Support/MergeSmith"))
+        Ok(home.join("Library/Application Support/MergeQueue"))
     }
 
     #[cfg(not(target_os = "macos"))]
     {
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             if !xdg.is_empty() {
-                return Ok(PathBuf::from(xdg).join("mergesmith"));
+                return Ok(PathBuf::from(xdg).join("mergequeue"));
             }
         }
-        Ok(home.join(".local/share/mergesmith"))
+        Ok(home.join(".local/share/mergequeue"))
     }
 }
 
@@ -65,12 +65,12 @@ mod tests {
     #[test]
     fn env_override_wins() {
         // Use a unique env var since std::env is process-global.
-        let prev = std::env::var("MERGESMITH_HOME").ok();
-        std::env::set_var("MERGESMITH_HOME", "/tmp/ms-override-xyz");
+        let prev = std::env::var("MERGEQUEUE_HOME").ok();
+        std::env::set_var("MERGEQUEUE_HOME", "/tmp/ms-override-xyz");
         assert_eq!(state_root().unwrap(), PathBuf::from("/tmp/ms-override-xyz"));
         match prev {
-            Some(v) => std::env::set_var("MERGESMITH_HOME", v),
-            None => std::env::remove_var("MERGESMITH_HOME"),
+            Some(v) => std::env::set_var("MERGEQUEUE_HOME", v),
+            None => std::env::remove_var("MERGEQUEUE_HOME"),
         }
     }
 }

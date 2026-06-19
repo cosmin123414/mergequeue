@@ -14,7 +14,7 @@
 //! 5. Press `Enter` to submit.
 //!
 //! After step 5 the agent is alive in the tmux window and the user can
-//! attach with `mergesmith resolve <id>`.
+//! attach with `mergequeue resolve <id>`.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -22,9 +22,8 @@ use std::time::Duration;
 
 use crate::agents::prompts;
 use crate::agents::tmux::TmuxOps;
-use crate::core::agent_backend::AgentBackend;
 use crate::core::ports::{AgentSessionAck, ConflictPrompt, MergeAgent, TmuxHandle};
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 pub struct OpencodeAgent {
     tmux: Arc<dyn TmuxOps>,
@@ -51,16 +50,6 @@ impl OpencodeAgent {
 }
 
 impl MergeAgent for OpencodeAgent {
-    fn backend(&self) -> AgentBackend {
-        AgentBackend::Opencode
-    }
-
-    fn check_available(&self) -> Result<()> {
-        which::which("opencode")
-            .map(|_| ())
-            .map_err(|_| Error::agent("`opencode` not found on PATH"))
-    }
-
     fn open_conflict_session(
         &self,
         _worktree: &Path,

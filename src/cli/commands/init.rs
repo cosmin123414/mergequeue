@@ -1,4 +1,4 @@
-//! `mergesmith init` — register the current repo.
+//! `mergequeue init` — register the current repo.
 
 use std::process::ExitCode;
 use std::time::Duration;

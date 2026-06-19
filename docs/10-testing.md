@@ -61,6 +61,6 @@ next rebase returns Conflict").
 ## Snapshot tests for the TUI
 
 `insta` for ratatui-rendered output (using `ratatui::backend::TestBackend`).
-Sprite cells are excluded from snapshots — they're tested separately by
-capturing the emitted Kitty protocol bytes and asserting they parse as
-well-formed escape sequences.
+The animation is tested separately at the geometry/raster layer
+(`tui::sprite::penrose` + `glyph`), not via screen snapshots, since the
+Braille wireframe changes every frame.

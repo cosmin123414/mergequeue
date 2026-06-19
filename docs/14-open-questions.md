@@ -3,7 +3,7 @@
 These were on the punch list and I want explicit answers before we leave
 the planning phase:
 
-1. **Bundle/binary/repo name** — `mergesmith` everywhere. Confirm
+1. **Bundle/binary/repo name** — `mergequeue` everywhere. Confirm
    availability on GitHub org, Homebrew tap, domain (if any).
 2. **License choice** — `MIT OR Apache-2.0`. Confirm.
 3. **PID-file lock when stale** — `fs2::FileExt::try_lock_exclusive` on
@@ -11,7 +11,7 @@ the planning phase:
    Confirm OK with this behavior.
 4. **`StepOutcome` shape** — one flat enum in v1; split per-state if it
    gets unwieldy. Confirm.
-5. **`mergesmith` bare command aliasing `mergesmith tui`** — yes.
+5. **`mergequeue` bare command aliasing `mergequeue tui`** — yes.
    Confirm.
 6. **Sprite frame data format** — Aseprite `json-array`. Confirm or let
    the artist choose at M5.

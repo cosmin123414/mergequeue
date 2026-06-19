@@ -1,4 +1,4 @@
-//! `mergesmith retry <id>` — re-queue a Failed or NeedsHelp entry.
+//! `mergequeue retry <id>` — re-queue a Failed or NeedsHelp entry.
 
 use std::process::ExitCode;
 

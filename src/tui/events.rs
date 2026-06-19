@@ -16,6 +16,10 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 /// enum is ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiAction {
+    /// Terminal tab/window gained focus.
+    FocusGained,
+    /// Terminal tab/window lost focus.
+    FocusLost,
     /// `q`: soft shutdown.
     QuitSoft,
     /// `Q` or `Ctrl-C`: hard shutdown.
@@ -27,6 +31,10 @@ pub enum TuiAction {
     /// `d`: delete the selected entry (only valid if Queued; the
     /// app-state layer enforces this).
     DeleteSelected,
+    /// `t`: attach to the selected NeedsHelp agent session.
+    AttachSelected,
+    /// Space: expand/collapse the selected queue entry.
+    ToggleExpanded,
     /// `?`: toggle the help overlay.
     ToggleHelp,
     /// A keystroke the TUI doesn't bind to anything.
@@ -46,6 +54,8 @@ pub fn map_key(ev: KeyEvent) -> TuiAction {
         KeyCode::Char('j') | KeyCode::Down => TuiAction::SelectDown,
         KeyCode::Char('k') | KeyCode::Up => TuiAction::SelectUp,
         KeyCode::Char('d') => TuiAction::DeleteSelected,
+        KeyCode::Char('t') => TuiAction::AttachSelected,
+        KeyCode::Char(' ') => TuiAction::ToggleExpanded,
         KeyCode::Char('?') => TuiAction::ToggleHelp,
         _ => TuiAction::Ignore,
     }
@@ -62,6 +72,8 @@ pub fn poll_action(timeout: Duration) -> std::io::Result<Option<TuiAction>> {
     if crossterm::event::poll(timeout)? {
         match crossterm::event::read()? {
             Event::Key(k) => Ok(Some(map_key(k))),
+            Event::FocusGained => Ok(Some(TuiAction::FocusGained)),
+            Event::FocusLost => Ok(Some(TuiAction::FocusLost)),
             // Resize and other events trigger a redraw via the outer
             // loop's next tick; we treat them all as Ignore here so
             // the loop continues.
@@ -116,6 +128,22 @@ mod tests {
     fn delete_and_help() {
         assert_eq!(map_key(k(KeyCode::Char('d'))), TuiAction::DeleteSelected);
         assert_eq!(map_key(k(KeyCode::Char('?'))), TuiAction::ToggleHelp);
+    }
+
+    #[test]
+    fn t_attaches_selected() {
+        assert_eq!(map_key(k(KeyCode::Char('t'))), TuiAction::AttachSelected);
+    }
+
+    #[test]
+    fn space_toggles_expanded() {
+        assert_eq!(map_key(k(KeyCode::Char(' '))), TuiAction::ToggleExpanded);
+    }
+
+    #[test]
+    fn enter_and_r_are_unbound() {
+        assert_eq!(map_key(k(KeyCode::Enter)), TuiAction::Ignore);
+        assert_eq!(map_key(k(KeyCode::Char('r'))), TuiAction::Ignore);
     }
 
     #[test]

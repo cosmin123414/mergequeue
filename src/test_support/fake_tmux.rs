@@ -30,10 +30,6 @@ pub enum TmuxCall {
         keys: String,
         enter: bool,
     },
-    KillWindow {
-        session: String,
-        window: String,
-    },
     WindowAlive {
         session: String,
         window: String,
@@ -130,17 +126,6 @@ impl TmuxOps for FakeTmux {
             keys: keys.to_string(),
             enter,
         });
-        Ok(())
-    }
-
-    fn kill_window(&self, handle: &TmuxHandle) -> Result<()> {
-        let mut g = self.state.lock().unwrap();
-        g.calls.push(TmuxCall::KillWindow {
-            session: handle.session.clone(),
-            window: handle.window.clone(),
-        });
-        g.windows
-            .retain(|(s, w)| !(s == &handle.session && w == &handle.window));
         Ok(())
     }
 

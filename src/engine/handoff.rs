@@ -28,6 +28,13 @@ use crate::core::queue::QueueEntry;
 use crate::core::repo::RegisteredRepo;
 use crate::error::Result;
 
+pub struct ConflictHandoff {
+    pub session: Arc<ConflictSession>,
+    pub conflicted_files: Vec<String>,
+    pub agent_started: bool,
+    pub error: Option<String>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn open_conflict_session(
     store: &dyn QueueStore,
@@ -38,28 +45,38 @@ pub fn open_conflict_session(
     tmux_pid: u32,
     repo: &RegisteredRepo,
     entry: &QueueEntry,
-) -> Result<Arc<ConflictSession>> {
+) -> Result<ConflictHandoff> {
     let session_name = tmux::session_name(tmux_pid);
     let window_name = tmux::window_name(&entry.id.short());
+    let conflicted_files = git
+        .conflicted_files(&entry.source_worktree)
+        .unwrap_or_default();
 
-    let (tmux_session, tmux_window, agent_token) = match try_open_tmux_and_agent(
-        tmux_ops,
-        agents,
-        git,
-        repo,
-        entry,
-        &session_name,
-        &window_name,
-    ) {
-        Ok((handle, token)) => (handle.session, handle.window, token),
-        Err(err) => {
-            tracing::warn!(
-                entry = %entry.id,
-                "conflict handoff failed: {err}; recording session anyway so the user can take over"
-            );
-            (session_name, window_name, None)
-        }
-    };
+    let (tmux_session, tmux_window, agent_token, agent_started, error) =
+        match try_open_tmux_and_agent(
+            tmux_ops,
+            agents,
+            repo,
+            entry,
+            &conflicted_files,
+            &session_name,
+            &window_name,
+        ) {
+            Ok((handle, token)) => (handle.session, handle.window, token, true, None),
+            Err(err) => {
+                tracing::warn!(
+                    entry = %entry.id,
+                    "conflict handoff failed: {err}; recording session anyway so the user can take over"
+                );
+                (
+                    session_name,
+                    window_name,
+                    None,
+                    false,
+                    Some(err.to_string()),
+                )
+            }
+        };
 
     let session = ConflictSession {
         id: ConflictSessionId::new(),
@@ -76,22 +93,24 @@ pub fn open_conflict_session(
         tracing::info!(entry = %entry.id, agent_token = %t, "agent acknowledged");
     }
     store.open_conflict_session(&session)?;
-    Ok(Arc::new(session))
+    Ok(ConflictHandoff {
+        session: Arc::new(session),
+        conflicted_files,
+        agent_started,
+        error,
+    })
 }
 
 fn try_open_tmux_and_agent(
     tmux_ops: &dyn TmuxOps,
     agents: &dyn AgentRegistry,
-    git: &dyn GitOps,
     repo: &RegisteredRepo,
     entry: &QueueEntry,
+    conflicted_files: &[String],
     session: &str,
     window: &str,
 ) -> Result<(TmuxHandle, Option<String>)> {
     // 1. Compose the prompt.
-    let conflicted_files = git
-        .conflicted_files(&entry.source_worktree)
-        .unwrap_or_default();
     let prompt = ConflictPrompt {
         repo_name: repo
             .root_path
@@ -101,7 +120,7 @@ fn try_open_tmux_and_agent(
             .to_string(),
         source_branch: entry.source_branch.clone(),
         target_branch: entry.target_branch.clone(),
-        conflicted_files,
+        conflicted_files: conflicted_files.to_vec(),
         ci_command_hint: ci_command_hint(repo),
     };
 

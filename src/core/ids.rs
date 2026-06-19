@@ -18,10 +18,6 @@ macro_rules! define_id {
                 Self(Uuid::new_v4())
             }
 
-            pub fn as_uuid(&self) -> Uuid {
-                self.0
-            }
-
             /// Six-character short form for human-readable display.
             pub fn short(&self) -> String {
                 let s = self.0.simple().to_string();

@@ -1,33 +1,34 @@
-# MergeSmith
+# MergeQueue
 
-A local merge queue with a pixel-art blacksmith. Register your repos, enqueue
-worktrees from parallel agents, and let the smith merge them into your default
-branches one by one — with CI gates and conflict-resolution agents.
+A local merge queue with an animated Penrose-tiling visualizer. Register your
+repos, enqueue worktrees from parallel agents, and let the queue merge them
+into your default branches one by one — with CI gates and conflict-resolution
+agents.
 
-MergeSmith is a single Rust binary. It runs as a foreground TUI process when
-you want to watch the smith hammer, and as one-shot CLI subcommands for
+MergeQueue is a single Rust binary. It runs as a foreground TUI process when
+you want to watch the queue work, and as one-shot CLI subcommands for
 everything else.
 
 ## Quick start
 
 ```sh
-brew install mergesmith/tap/mergesmith
+brew install mergequeue/tap/mergequeue
 cd ~/code/my-repo
-mergesmith init
-mergesmith              # opens the animated TUI; worker starts
+mergequeue init
+mergequeue              # opens the animated TUI; worker starts
 # …in another terminal, inside any registered worktree:
-mergesmith enqueue
+mergequeue enqueue
 ```
 
 ## Requirements
 
 - macOS or Linux (x86_64 or aarch64)
-- A terminal that speaks the Kitty graphics protocol for `mergesmith tui`:
-  Kitty, Ghostty, WezTerm, or iTerm2 (≥ 3.5). Plain-text CLI subcommands work
-  in any terminal.
+- Any terminal runs the TUI. The Penrose animation renders as a
+  Braille-glyph wireframe, so it works everywhere; plain-text CLI
+  subcommands work everywhere too.
 - `git` ≥ 2.30 on PATH
 - `tmux` on PATH (used for conflict-resolution agent sessions)
-- One of: `opencode`, `claude`, `cursor-agent`, `codex` (for `mergesmith resolve`)
+- `opencode` on PATH (for `mergequeue resolve`)
 
 See [`docs/`](docs/) for the full plan.
 

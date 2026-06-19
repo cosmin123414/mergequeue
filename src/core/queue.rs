@@ -20,17 +20,6 @@ pub enum QueueStatus {
 }
 
 impl QueueStatus {
-    pub const ALL: [Self; 8] = [
-        Self::Queued,
-        Self::Rebasing,
-        Self::CIRunning,
-        Self::Merging,
-        Self::NeedsHelp,
-        Self::Merged,
-        Self::Failed,
-        Self::Cancelled,
-    ];
-
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Merged | Self::Failed | Self::Cancelled)
     }
@@ -136,6 +125,63 @@ impl std::fmt::Display for MergeFailureReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueEntryDetails {
+    pub headline: Option<String>,
+    #[serde(default)]
+    pub items: Vec<QueueEntryDetailItem>,
+}
+
+impl QueueEntryDetails {
+    pub fn new(headline: impl Into<String>) -> Self {
+        Self {
+            headline: Some(headline.into()),
+            items: Vec::new(),
+        }
+    }
+
+    pub fn push(
+        &mut self,
+        status: QueueEntryDetailStatus,
+        title: impl Into<String>,
+        detail: Option<String>,
+    ) {
+        self.items.push(QueueEntryDetailItem {
+            status,
+            title: title.into(),
+            detail: detail.into(),
+        });
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueEntryDetailItem {
+    pub status: QueueEntryDetailStatus,
+    pub title: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueueEntryDetailStatus {
+    Pending,
+    Running,
+    Success,
+    Blocked,
+    Info,
+}
+
+impl QueueEntryDetailStatus {
+    pub fn marker(self) -> &'static str {
+        match self {
+            Self::Pending => "○",
+            Self::Running => "◌",
+            Self::Success => "✓",
+            Self::Blocked => "!",
+            Self::Info => "·",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueEntry {
     pub id: QueueEntryId,
     pub repo_id: RepoId,
@@ -155,6 +201,7 @@ pub struct QueueEntry {
     pub merge_log_path: Option<PathBuf>,
     pub conflict_session_id: Option<ConflictSessionId>,
     pub message: Option<String>,
+    pub details: Option<QueueEntryDetails>,
     pub claimed_by_pid: Option<u32>,
     #[serde(default, with = "time::serde::iso8601::option")]
     pub claimed_at: Option<OffsetDateTime>,

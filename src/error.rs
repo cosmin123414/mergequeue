@@ -36,7 +36,7 @@ pub enum Error {
     #[error("not found: {0}")]
     NotFound(String),
 
-    #[error("state-root not resolvable; set $MERGESMITH_HOME")]
+    #[error("state-root not resolvable; set $MERGEQUEUE_HOME")]
     StateRootMissing,
 
     #[error("toml: {0}")]

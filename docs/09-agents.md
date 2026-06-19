@@ -5,19 +5,19 @@
 ## tmux
 
 Direct port of `agent-orchestrator`'s tmux module. One session per
-MergeSmith run (`mergesmith-<short-pid>`) with one window per conflict
+MergeQueue run (`mergequeue-<short-pid>`) with one window per conflict
 session. Detach-safe: closing the user's terminal doesn't kill the agent.
 
 ## Backends
 
 | Backend | Binary | Launch shape |
 |---|---|---|
-| Opencode (default) | `opencode` | `opencode --resume-session …` inside the worktree |
-| Claude Code | `claude` | `claude` inside the worktree with prompt piped via heredoc |
-| Cursor | `cursor-agent` | `cursor-agent` inside the worktree (falls back to `open -a Cursor <path>`) |
-| Codex | `codex` | `codex` inside the worktree with prompt argument |
+| Opencode | `opencode` | `opencode` inside the worktree, prompt sent via `tmux send-keys` |
 
-All four wrap the user's CLI; MergeSmith never embeds a model itself.
+MergeQueue ships a single backend (opencode); it wraps the user's CLI
+and never embeds a model itself. The `MergeAgent` trait and the
+`AgentRegistry` seam are kept so additional backends can be added later
+without touching the engine.
 
 ## Prompts
 
@@ -37,13 +37,13 @@ prompt-injection mechanism (varies per backend).
 open_conflict_session
    └─ records started_at, tmux_session/window in DB
       └─ user works in the tmux window
-         └─ user runs `mergesmith retry <id>` from the worktree
+         └─ user runs `mergequeue retry <id>` from the worktree
             └─ engine sets status = Queued, last_outcome = AgentResolvedConflict
                └─ on next claim, FSM routes to Rebase
                   └─ close_conflict_session(Resolved)
 ```
 
-If MergeSmith dies mid-session, on restart the recovery sweep checks
+If MergeQueue dies mid-session, on restart the recovery sweep checks
 whether the tmux session still exists. If gone, `close_conflict_session
 (Abandoned)`. If alive, leave it; the user can attach with `tmux attach
--t mergesmith-…`.
+-t mergequeue-…`.

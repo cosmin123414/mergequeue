@@ -1,4 +1,4 @@
-# MergeSmith — Architectural Intent
+# MergeQueue — Architectural Intent
 
 **One feature** (a local merge queue) with **two presentation surfaces** (CLI
 one-shots and a long-running TUI). Both surfaces share a single SQLite file as
@@ -9,7 +9,7 @@ the only coordination mechanism.
 ```
 ┌────────────────────────────┐        ┌────────────────────────────────┐
 │ CLI one-shots              │        │ TUI (single long-running proc) │
-│   init, enqueue, cancel,   │        │   ratatui + Kitty sprite       │
+│   init, enqueue, cancel,   │        │   ratatui Braille-glyph        │
 │   retry, resolve, status,  │        │   visualizer + delete-queued   │
 │   logs, repos, doctor      │        │   worker pool runs in-process  │
 └────────────────────────────┘        └────────────────────────────────┘
@@ -33,8 +33,8 @@ src/
 ├── store/                SQLite adapter for QueueStore
 ├── git/                  git-subprocess adapter for GitOps
 ├── engine/               THE MERGE-QUEUE ENGINE (state machine + worker pool)
-├── agents/               MergeAgent impls (opencode, claude, cursor, codex)
-├── tui/                  ratatui + Kitty sprite
+├── agents/               MergeAgent impl (opencode) + tmux + prompts
+├── tui/                  ratatui + Braille-glyph Penrose visualizer
 ├── cli/                  clap defs + subcommand handlers
 └── test_support/         feature-gated fakes (Clock, Git, Store, Agent)
 ```
@@ -53,6 +53,7 @@ src/
    `repo_id`-scoped row claiming.
 4. **The TUI is a visualizer.** Its only mutation is `d` to delete a queued
    (not in-flight) entry. Every other mutation is a CLI subcommand.
-5. **Kitty protocol is required for the TUI**, but never for the CLI.
+5. **The visualizer renders as Braille glyphs** via ratatui, so the TUI
+   works in any terminal — no Kitty graphics protocol required.
 6. **Crash recovery on every startup.** Entries with claimed_by_pid pointing
    at a dead PID get swept back to Queued.

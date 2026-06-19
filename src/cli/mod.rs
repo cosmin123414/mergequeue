@@ -22,7 +22,7 @@ pub fn run() -> ExitCode {
 }
 
 fn init_logging() {
-    let filter = tracing_subscriber::EnvFilter::try_from_env("MERGESMITH_LOG")
+    let filter = tracing_subscriber::EnvFilter::try_from_env("MERGEQUEUE_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)

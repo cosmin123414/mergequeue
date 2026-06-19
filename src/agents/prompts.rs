@@ -58,7 +58,7 @@ mod tests {
 
     fn sample() -> ConflictPrompt {
         ConflictPrompt {
-            repo_name: "mergesmith".into(),
+            repo_name: "mergequeue".into(),
             source_branch: "feat/auth".into(),
             target_branch: "main".into(),
             conflicted_files: vec!["src/lib.rs".into(), "Cargo.toml".into()],
@@ -71,7 +71,7 @@ mod tests {
         let r = render(&sample()).unwrap();
         assert!(r.user.contains("feat/auth"));
         assert!(r.user.contains("main"));
-        assert!(r.user.contains("mergesmith"));
+        assert!(r.user.contains("mergequeue"));
         assert!(r.user.contains("`src/lib.rs`"));
         assert!(r.user.contains("`Cargo.toml`"));
         assert!(r.user.contains("cargo test"));
@@ -90,7 +90,7 @@ mod tests {
     fn system_prompt_present() {
         let r = render(&sample()).unwrap();
         assert!(r.system.contains("Do not push"));
-        assert!(r.system.contains("MERGESMITH: ready for retry"));
+        assert!(r.system.contains("MERGEQUEUE: ready for retry"));
     }
 
     #[test]

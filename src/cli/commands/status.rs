@@ -1,4 +1,4 @@
-//! `mergesmith status` — print the queue.
+//! `mergequeue status` — print the queue.
 
 use std::process::ExitCode;
 

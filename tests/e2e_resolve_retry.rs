@@ -1,4 +1,4 @@
-//! M2 e2e: verifies that `mergesmith retry <id>` on a `NeedsHelp` entry
+//! M2 e2e: verifies that `mergequeue retry <id>` on a `NeedsHelp` entry
 //! closes the open `ConflictSession` as `Resolved` and re-queues the
 //! entry with `last_outcome = AgentResolvedConflict`.
 //!
@@ -10,13 +10,13 @@ use std::process::Command;
 use std::sync::Arc;
 
 use assert_cmd::prelude::*;
-use mergesmith::core::agent_backend::AgentBackend;
-use mergesmith::core::conflict::{ConflictOutcome, ConflictSession};
-use mergesmith::core::ids::{ConflictSessionId, QueueEntryId, RepoId};
-use mergesmith::core::ports::{EntryFilter, QueueStore};
-use mergesmith::core::queue::{MergeFailureReason, QueueEntry, QueueStatus, StepOutcome};
-use mergesmith::core::repo::{RegisteredRepo, RepoCiConfig};
-use mergesmith::store::SqliteStore;
+use mergequeue::core::agent_backend::AgentBackend;
+use mergequeue::core::conflict::{ConflictOutcome, ConflictSession};
+use mergequeue::core::ids::{ConflictSessionId, QueueEntryId, RepoId};
+use mergequeue::core::ports::{EntryFilter, QueueStore};
+use mergequeue::core::queue::{MergeFailureReason, QueueEntry, QueueStatus, StepOutcome};
+use mergequeue::core::repo::{RegisteredRepo, RepoCiConfig};
+use mergequeue::store::SqliteStore;
 use tempfile::TempDir;
 use time::OffsetDateTime;
 
@@ -26,8 +26,8 @@ fn now() -> OffsetDateTime {
 }
 
 fn ms(state_root: &std::path::Path) -> Command {
-    let mut c = Command::cargo_bin("mergesmith").unwrap();
-    c.env("MERGESMITH_HOME", state_root);
+    let mut c = Command::cargo_bin("mergequeue").unwrap();
+    c.env("MERGEQUEUE_HOME", state_root);
     c
 }
 
@@ -54,7 +54,7 @@ fn seed_needs_help(
         id: ConflictSessionId::new(),
         queue_entry_id: QueueEntryId::new(), // overwritten below for entry linkage
         agent_backend: AgentBackend::Opencode,
-        tmux_session: "mergesmith-test".into(),
+        tmux_session: "mergequeue-test".into(),
         tmux_window: "conflict-test".into(),
         started_at: now(),
         ended_at: None,
@@ -79,6 +79,7 @@ fn seed_needs_help(
         merge_log_path: None,
         conflict_session_id: Some(session.id),
         message: None,
+        details: None,
         claimed_by_pid: None,
         claimed_at: None,
     };
@@ -150,6 +151,7 @@ fn resolve_on_non_needs_help_entry_refuses() {
         merge_log_path: None,
         conflict_session_id: None,
         message: None,
+        details: None,
         claimed_by_pid: None,
         claimed_at: None,
     };

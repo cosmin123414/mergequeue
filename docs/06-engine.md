@@ -1,6 +1,6 @@
 # 06 — The engine
 
-`src/engine/` is the heart of MergeSmith. It contains:
+`src/engine/` is the heart of MergeQueue. It contains:
 
 ```
 engine/
@@ -85,7 +85,7 @@ When the FSM returns `HandoffToAgent`:
 
 1. Look up the configured `AgentBackend` (per-repo, falling back to global).
 2. Acquire a `MergeAgent` from the registry.
-3. Open a tmux session named `mergesmith-<entry-shortid>` with a window
+3. Open a tmux session named `mergequeue-<entry-shortid>` with a window
    named `<repo>-<branch>`.
 4. Render the conflict prompt with minijinja (see `09-agents.md`).
 5. Spawn the agent inside the tmux window.
@@ -94,7 +94,7 @@ When the FSM returns `HandoffToAgent`:
    persist, broadcast event.
 
 The worker does **not** wait for the agent to finish. The user is expected
-to resolve and re-enqueue via `mergesmith retry <id>`.
+to resolve and re-enqueue via `mergequeue retry <id>`.
 
 ## Per-repo workers
 

@@ -84,8 +84,6 @@ Implementations:
 
 ```rust
 pub trait MergeAgent: Send + Sync {
-    fn backend(&self) -> AgentBackend;
-    fn check_available(&self) -> Result<()>;
     fn open_conflict_session(
         &self,
         worktree: &Path,
@@ -101,10 +99,7 @@ pub trait AgentRegistry: Send + Sync {
 
 Implementations:
 
-- `agents::opencode::OpencodeAgent` (default)
-- `agents::claude_code::ClaudeCodeAgent`
-- `agents::cursor::CursorAgent`
-- `agents::codex::CodexAgent`
+- `agents::opencode::OpencodeAgent` (the only shipped backend)
 - `test_support::FakeAgent` — scripted outcomes.
 
 ## Why exactly these four

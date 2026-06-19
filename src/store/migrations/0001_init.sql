@@ -1,4 +1,4 @@
--- Initial schema for MergeSmith.
+-- Initial schema for MergeQueue.
 -- All TEXT IDs are UUIDs serialized as hex with dashes.
 -- All timestamps are Unix seconds (INTEGER, UTC).
 

@@ -12,17 +12,17 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mergesmith::agents::tmux::{ProcessTmux, TmuxOps};
-use mergesmith::agents::DefaultAgentRegistry;
-use mergesmith::core::agent_backend::AgentBackend;
-use mergesmith::core::ids::{QueueEntryId, RepoId};
-use mergesmith::core::ports::{AgentRegistry, Clock, GitOps, QueueStore};
-use mergesmith::core::queue::{QueueEntry, QueueStatus};
-use mergesmith::core::repo::{RegisteredRepo, RepoCiConfig};
-use mergesmith::engine::events::EventBroadcaster;
-use mergesmith::engine::pool::{EnginePool, PoolDeps};
-use mergesmith::git::ProcessGit;
-use mergesmith::store::{SqliteStore, SystemClock};
+use mergequeue::agents::tmux::{ProcessTmux, TmuxOps};
+use mergequeue::agents::DefaultAgentRegistry;
+use mergequeue::core::agent_backend::AgentBackend;
+use mergequeue::core::ids::{QueueEntryId, RepoId};
+use mergequeue::core::ports::{AgentRegistry, Clock, GitOps, QueueStore};
+use mergequeue::core::queue::{QueueEntry, QueueStatus};
+use mergequeue::core::repo::{RegisteredRepo, RepoCiConfig};
+use mergequeue::engine::events::EventBroadcaster;
+use mergequeue::engine::pool::{EnginePool, PoolDeps};
+use mergequeue::git::ProcessGit;
+use mergequeue::store::{SqliteStore, SystemClock};
 use tempfile::TempDir;
 use time::OffsetDateTime;
 
@@ -122,6 +122,7 @@ fn pool_merges_two_independent_repos_in_parallel() {
         merge_log_path: None,
         conflict_session_id: None,
         message: None,
+        details: None,
         claimed_by_pid: None,
         claimed_at: None,
     };

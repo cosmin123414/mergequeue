@@ -6,9 +6,12 @@ use time::OffsetDateTime;
 use crate::error::{Error, Result};
 
 /// The schema version this binary supports.
-pub const SUPPORTED_VERSION: i64 = 1;
+pub const SUPPORTED_VERSION: i64 = 2;
 
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("migrations/0001_init.sql"))];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("migrations/0001_init.sql")),
+    (2, include_str!("migrations/0002_queue_entry_details.sql")),
+];
 
 pub fn run(conn: &mut Connection) -> Result<()> {
     ensure_versions_table(conn)?;

@@ -12,7 +12,7 @@ pub enum TuiLockError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("another MergeSmith TUI is already running (pid {pid})")]
+    #[error("another MergeQueue TUI is already running (pid {pid})")]
     AlreadyHeld { pid: u32 },
 }
 

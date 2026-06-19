@@ -39,13 +39,6 @@ impl EntryFilter {
         Self::default()
     }
 
-    pub fn by_repo(repo: RepoId) -> Self {
-        Self {
-            repo_id: Some(repo),
-            statuses: None,
-        }
-    }
-
     pub fn with_status(mut self, statuses: Vec<QueueStatus>) -> Self {
         self.statuses = Some(statuses);
         self
@@ -76,7 +69,7 @@ pub trait QueueStore: Send + Sync {
     fn open_conflict_session(&self, s: &ConflictSession) -> Result<()>;
     fn get_conflict_session(&self, id: ConflictSessionId) -> Result<Option<ConflictSession>>;
     /// Sessions with `ended_at IS NULL`. Used by the recovery sweep to
-    /// detect orphans when MergeSmith restarts.
+    /// detect orphans when MergeQueue restarts.
     fn list_open_conflict_sessions(&self) -> Result<Vec<ConflictSession>>;
     fn close_conflict_session(
         &self,
@@ -155,8 +148,6 @@ pub struct AgentSessionAck {
 }
 
 pub trait MergeAgent: Send + Sync {
-    fn backend(&self) -> AgentBackend;
-    fn check_available(&self) -> Result<()>;
     /// Spawn the agent inside `tmux` with `prompt`, working from
     /// `worktree`. Implementations must return promptly once the agent
     /// has been started; they must NOT block until the agent finishes.

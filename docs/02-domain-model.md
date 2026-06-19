@@ -111,8 +111,12 @@ pub enum MergeFailureReason {
 ## AgentBackend
 
 ```rust
-pub enum AgentBackend { Opencode, ClaudeCode, Cursor, Codex }
+pub enum AgentBackend { Opencode }
 ```
+
+Kept as an enum (rather than collapsed away) so the per-repo
+`agent_backend` column and the `MergeAgent` seam stay stable if more
+backends are added later.
 
 ## ConflictSession
 
@@ -135,11 +139,9 @@ pub enum ConflictOutcome { Resolved, Abandoned, AgentCrashed }
 
 ```rust
 pub enum QueueEvent {
-    Enqueued(QueueEntryId),
     StatusChanged { id: QueueEntryId, from: QueueStatus, to: QueueStatus },
     StepStarted { id: QueueEntryId, action: NextAction },
     StepFinished { id: QueueEntryId, outcome: StepOutcome },
-    Removed(QueueEntryId),
 }
 ```
 

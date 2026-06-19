@@ -8,7 +8,6 @@ use crate::core::state_machine::NextAction;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QueueEvent {
-    Enqueued(QueueEntryId),
     StatusChanged {
         id: QueueEntryId,
         from: QueueStatus,
@@ -22,5 +21,4 @@ pub enum QueueEvent {
         id: QueueEntryId,
         outcome: StepOutcome,
     },
-    Removed(QueueEntryId),
 }

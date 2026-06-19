@@ -2,7 +2,7 @@
 
 ## Build artifacts
 
-`cargo build --release` produces one binary: `mergesmith`. Cross-built for:
+`cargo build --release` produces one binary: `mergequeue`. Cross-built for:
 
 - macOS aarch64 (Apple Silicon)
 - macOS x86_64
@@ -14,7 +14,7 @@ self-contained.
 
 ## Channels
 
-- **Homebrew tap** — `brew install mergesmith/tap/mergesmith`. Primary
+- **Homebrew tap** — `brew install mergequeue/tap/mergequeue`. Primary
   channel.
 - **GitHub Releases** — `.tar.gz` per platform with the binary and a
   `LICENSE` file. Pre-built for `curl | sh` installs.

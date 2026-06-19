@@ -1,4 +1,4 @@
-//! `mergesmith repos {list|remove}`.
+//! `mergequeue repos {list|remove}`.
 
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -19,7 +19,7 @@ fn list() -> Result<ExitCode> {
     let ctx = CliContext::open()?;
     let repos = ctx.store.list_repos()?;
     if repos.is_empty() {
-        println!("(no repos registered — run `mergesmith init` inside a repo)");
+        println!("(no repos registered — run `mergequeue init` inside a repo)");
         return Ok(ExitCode::SUCCESS);
     }
     println!(

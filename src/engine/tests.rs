@@ -51,6 +51,7 @@ fn fixture_entry(repo: &RegisteredRepo, source_branch: &str) -> QueueEntry {
         merge_log_path: None,
         conflict_session_id: None,
         message: None,
+        details: None,
         claimed_by_pid: None,
         claimed_at: None,
     }
@@ -71,7 +72,7 @@ fn build_deps(
     runs: std::path::PathBuf,
 ) -> (WorkerDeps, Helpers) {
     let clock = Arc::new(FakeClock::epoch());
-    let events = Arc::new(EventBroadcaster::with_history());
+    let events = Arc::new(EventBroadcaster::new());
     let tmux: Arc<FakeTmux> = Arc::new(FakeTmux::new());
     let agent = Arc::new(FakeAgent::new(AgentBackend::Opencode));
     let registry = Arc::new(FakeAgentRegistry::new(agent.clone()));
@@ -165,6 +166,22 @@ fn rebase_conflict_becomes_needs_help() {
         Some(MergeFailureReason::RebaseUnresolvable)
     );
     assert!(final_entry.conflict_session_id.is_some());
+    let details = final_entry.details.as_ref().expect("details recorded");
+    assert_eq!(
+        details.headline.as_deref(),
+        Some("Needs help resolving merge conflicts")
+    );
+    assert!(details.items.iter().any(|item| {
+        item.title == "Rebase has conflicts"
+            && item
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("src/lib.rs"))
+    }));
+    assert!(details
+        .items
+        .iter()
+        .any(|item| item.title == "opencode handoff"));
 
     // Handoff opened a tmux window AND invoked the agent.
     let agent_calls = h.agent.calls();
@@ -176,7 +193,7 @@ fn rebase_conflict_becomes_needs_help() {
     );
     assert_eq!(agent_calls[0].prompt.source_branch, "feat/conflict");
     assert_eq!(agent_calls[0].prompt.target_branch, "main");
-    assert_eq!(agent_calls[0].tmux.session, "mergesmith-9999");
+    assert_eq!(agent_calls[0].tmux.session, "mergequeue-9999");
     let short = final_entry.id.short();
     assert_eq!(agent_calls[0].tmux.window, format!("conflict-{short}"));
 
@@ -236,6 +253,13 @@ fn dirty_target_returns_to_queued_and_sleeps() {
     let after = store.get_entry(entry.id).unwrap().unwrap();
     assert_eq!(after.status, QueueStatus::Queued);
     assert!(after.claimed_by_pid.is_none());
+    assert_eq!(
+        after
+            .details
+            .as_ref()
+            .and_then(|details| details.headline.as_deref()),
+        Some("Waiting for target worktree to be clean")
+    );
     // FakeClock recorded a sleep of exactly the configured retry.
     assert_eq!(h.clock.sleeps(), vec![Duration::from_secs(7)]);
 }
@@ -314,6 +338,16 @@ fn ci_lint_failure_short_circuits() {
     assert_eq!(after.failure_reason, Some(MergeFailureReason::CILintFailed));
     // CI lint log file should exist; test/build should not.
     let entry_dir = runs.join(entry.id.to_string());
+    assert_eq!(after.ci_log_dir, Some(entry_dir.clone()));
+    let details = after.details.as_ref().expect("details recorded");
+    assert_eq!(details.headline.as_deref(), Some("Blocked: CILintFailed"));
+    assert!(details.items.iter().any(|item| {
+        item.title == "Lint failed"
+            && item
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("ci-lint.log"))
+    }));
     assert!(entry_dir.join("ci-lint.log").exists());
     assert!(!entry_dir.join("ci-test.log").exists());
     assert!(!entry_dir.join("ci-build.log").exists());
@@ -414,6 +448,7 @@ mod pool_tests {
             merge_log_path: None,
             conflict_session_id: None,
             message: None,
+            details: None,
             claimed_by_pid: None,
             claimed_at: None,
         }

@@ -8,7 +8,7 @@ use crate::error::Result;
 /// Sweep stale `claimed_by_pid` rows whose PIDs are no longer alive
 /// back to `Queued`. `live_pids` should include the current process so
 /// that an in-progress recovery doesn't reset its own claims (this is
-/// only relevant if MergeSmith is restarted in-place; on first start
+/// only relevant if MergeQueue is restarted in-place; on first start
 /// our PID has not yet claimed anything, so passing `[]` is safe).
 pub fn sweep_dead_claims(store: &dyn QueueStore, live_pids: &[u32]) -> Result<usize> {
     store.sweep_dead_pid_claims(live_pids)
@@ -19,8 +19,8 @@ pub fn sweep_dead_claims(store: &dyn QueueStore, live_pids: &[u32]) -> Result<us
 /// the number of sessions closed.
 ///
 /// Note: this does **not** touch the corresponding `QueueEntry`. The
-/// entry remains in `NeedsHelp`; the user can still `mergesmith resolve
-/// <id>` (which will re-spawn an agent) or `mergesmith retry <id>`.
+/// entry remains in `NeedsHelp`; the user can still `mergequeue resolve
+/// <id>` (which will re-spawn an agent) or `mergequeue retry <id>`.
 pub fn sweep_abandoned_conflict_sessions(
     store: &dyn QueueStore,
     tmux: &dyn TmuxOps,
@@ -73,13 +73,13 @@ mod tests {
         // Two sessions: one with a live tmux window, one without.
         let alive_handle = tmux
             .new_window(
-                "mergesmith-1",
+                "mergequeue-1",
                 "conflict-alive",
                 std::path::Path::new("/tmp"),
             )
             .unwrap();
         let dead_handle = TmuxHandle {
-            session: "mergesmith-1".into(),
+            session: "mergequeue-1".into(),
             window: "conflict-dead".into(),
         };
 

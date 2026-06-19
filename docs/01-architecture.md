@@ -7,9 +7,9 @@ CLI run alongside a long-running TUI). They communicate through one SQLite
 file with WAL journaling and FK enforcement.
 
 ```
-$MERGESMITH_HOME/
+$MERGEQUEUE_HOME/
   state.sqlite[+ wal + shm]
-  tui.pid                   (singleton lock for `mergesmith tui`)
+  tui.pid                   (singleton lock for `mergequeue tui`)
   runs/<entry-id>/
     ci-lint.log
     ci-test.log
@@ -21,9 +21,9 @@ $MERGESMITH_HOME/
 
 State-root resolution:
 
-1. `$MERGESMITH_HOME` if set
-2. macOS: `$HOME/Library/Application Support/MergeSmith`
-3. Linux: `$XDG_DATA_HOME/mergesmith` (default `$HOME/.local/share/mergesmith`)
+1. `$MERGEQUEUE_HOME` if set
+2. macOS: `$HOME/Library/Application Support/MergeQueue`
+3. Linux: `$XDG_DATA_HOME/mergequeue` (default `$HOME/.local/share/mergequeue`)
 
 ## Modules and dependency direction
 
@@ -32,7 +32,7 @@ core   (pure domain + ports, no I/O)
   ▲
   ├──── store    (SQLite adapter implementing QueueStore)
   ├──── git      (subprocess adapter implementing GitOps)
-  └──── agents   (impls of MergeAgent: opencode/claude/cursor/codex)
+  └──── agents   (impl of MergeAgent: opencode)
                       ▲
                       │
                    engine     (state_machine + worker pool, uses ports)

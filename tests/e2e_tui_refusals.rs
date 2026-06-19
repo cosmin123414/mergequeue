@@ -14,8 +14,8 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 fn ms(state_root: &std::path::Path) -> Command {
-    let mut c = Command::cargo_bin("mergesmith").unwrap();
-    c.env("MERGESMITH_HOME", state_root);
+    let mut c = Command::cargo_bin("mergequeue").unwrap();
+    c.env("MERGEQUEUE_HOME", state_root);
     c
 }
 
@@ -32,8 +32,8 @@ fn tui_subcommand_refuses_without_a_tty() {
 }
 
 #[test]
-fn bare_mergesmith_also_refuses_without_a_tty() {
-    // Bare `mergesmith` aliases `mergesmith tui` (per docs/07-cli.md).
+fn bare_mergequeue_also_refuses_without_a_tty() {
+    // Bare `mergequeue` aliases `mergequeue tui` (per docs/07-cli.md).
     let state_root = TempDir::new().unwrap();
     ms(state_root.path()).assert().code(2);
 }
